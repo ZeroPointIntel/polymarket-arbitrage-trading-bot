@@ -1,4 +1,4 @@
-# OPENCLAW · POLYMARKET ARB BOT
+# POLYMARKET ARBITRAGE BOT WITH OPENCLAW INTEGRATION
 
 > Two independent arbitrage strategies for Polymarket binary prediction markets on Polygon. try-now: https://genoshide-polymarket.replit.app/bot-dashboard/
 
