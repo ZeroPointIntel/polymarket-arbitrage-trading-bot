@@ -1,6 +1,6 @@
 # OPENCLAW · POLYMARKET ARB BOT
 
-> Two independent arbitrage strategies for Polymarket binary prediction markets on Polygon.
+> Two independent arbitrage strategies for Polymarket binary prediction markets on Polygon. try-now: https://genoshide-polymarket.replit.app/bot-dashboard/
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue)](https://python.org)
 [![Polygon](https://img.shields.io/badge/Network-Polygon_Mainnet-purple)](https://polygon.technology)
