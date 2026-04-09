@@ -303,7 +303,7 @@ class BinanceWebSocketFeed:
 
     async def _bootstrap_price_from_rest(self) -> None:
         """Fetch BTC price from REST API and inject as a synthetic tick."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for url in self.REST_URLS:
             try:
                 response = await loop.run_in_executor(
