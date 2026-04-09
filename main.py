@@ -522,7 +522,7 @@ class PolymarketArbitrageBot:
             return True
 
         try:
-            raw = await asyncio.get_event_loop().run_in_executor(
+            raw = await asyncio.get_running_loop().run_in_executor(
                 None, lambda: input("Your choice [E/C]: ").strip().lower()
             )
             return raw.startswith("e")
@@ -535,31 +535,31 @@ class PolymarketArbitrageBot:
     # Signal Handling & Trade Execution
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def _handle_signal(self, signal: TradeSignal) -> None:
+    async def _handle_signal(self, trade_signal: TradeSignal) -> None:
         """Process a trade signal: size, validate, and execute."""
         # Block if this asset already has an open (unresolved) position.
-        existing = self._asset_open_position.get(signal.asset)
+        existing = self._asset_open_position.get(trade_signal.asset)
         if existing:
             logger.debug(
                 "Asset %s locked by open position %s — new signal ignored",
-                signal.asset.upper(), existing[:12],
+                trade_signal.asset.upper(), existing[:12],
             )
             return
 
-        logger.info("Processing signal: %s", signal)
+        logger.info("Processing signal: %s", trade_signal)
 
         # NORMAL MODE: buy in the direction of the signal.
         # Signal says UP → buy YES, DOWN → buy NO.
-        # Use signal.current_polymarket_price (fresh price fetched by edge detector)
+        # Use trade_signal.current_polymarket_price (fresh price fetched by edge detector)
         # NOT market.yes_price/no_price which may be stale/default 0.50.
-        if signal.direction == "UP":
-            trade_token_id    = signal.market.yes_token_id
+        if trade_signal.direction == "UP":
+            trade_token_id    = trade_signal.market.yes_token_id
         else:
-            trade_token_id    = signal.market.no_token_id
-        trade_entry_price = signal.current_polymarket_price
+            trade_token_id    = trade_signal.market.no_token_id
+        trade_entry_price = trade_signal.current_polymarket_price
 
         # Calculate Kelly position size
-        win_prob = signal.fair_value_estimate
+        win_prob = trade_signal.fair_value_estimate
         logger.info(
             "Kelly inputs: balance=$%.2f win_prob=%.3f entry_price=%.4f token=%s",
             self.risk_manager.current_balance, win_prob, trade_entry_price,
@@ -586,7 +586,7 @@ class PolymarketArbitrageBot:
             token_id=trade_token_id,
             side="BUY",
             amount_usdc=kelly.position_size_usdc,
-            market_info=signal.market,
+            market_info=trade_signal.market,
         )
 
         if not order_result.success:
@@ -597,24 +597,24 @@ class PolymarketArbitrageBot:
                 severity="ERROR",
             )
             # Set per-asset cooldown so we don't immediately retry the same asset
-            self.edge_detector._last_signal_time[signal.asset] = time.time()
+            self.edge_detector._last_signal_time[trade_signal.asset] = time.time()
             return
 
         # Acquire per-asset lock so no second order is placed until this closes.
-        self._asset_open_position[signal.asset] = order_result.order_id
+        self._asset_open_position[trade_signal.asset] = order_result.order_id
 
         # Register position with risk manager
         position = Position(
             order_id=order_result.order_id,
             token_id=trade_token_id,
-            market_question=signal.market.question,
+            market_question=trade_signal.market.question,
             side="BUY",
             entry_price=order_result.price,
             size_shares=order_result.size,
             cost_usdc=order_result.size * order_result.price,
             opened_at=order_result.timestamp,
-            asset=signal.asset,
-            direction=signal.direction,  # "UP" or "DOWN"
+            asset=trade_signal.asset,
+            direction=trade_signal.direction,  # "UP" or "DOWN"
             paper_mode=self.config.paper_mode,
         )
         self.risk_manager.register_trade_open(position)
@@ -622,23 +622,23 @@ class PolymarketArbitrageBot:
         # Notifications
         self.telegram.send_trade_opened(
             order_id=order_result.order_id,
-            market_question=signal.market.question,
-            side=signal.side,
+            market_question=trade_signal.market.question,
+            side=trade_signal.side,
             price=order_result.price,
             size_usdc=kelly.position_size_usdc,
-            edge=signal.edge,
-            btc_move=signal.btc_move,
+            edge=trade_signal.edge,
+            btc_move=trade_signal.btc_move,
             paper_mode=self.config.paper_mode,
-            asset=signal.asset,
-            direction=signal.direction,
+            asset=trade_signal.asset,
+            direction=trade_signal.direction,
         )
         self.openclaw.push_trade_opened(
             order_id=order_result.order_id,
-            market_question=signal.market.question,
-            side=signal.side,
+            market_question=trade_signal.market.question,
+            side=trade_signal.side,
             price=order_result.price,
             size_usdc=kelly.position_size_usdc,
-            edge=signal.edge,
+            edge=trade_signal.edge,
             paper_mode=self.config.paper_mode,
         )
 
@@ -646,7 +646,7 @@ class PolymarketArbitrageBot:
             "Trade executed: %s | $%.2f USDC | Edge: %.4f | Kelly: %.4f",
             order_result.order_id,
             kelly.position_size_usdc,
-            signal.edge,
+            trade_signal.edge,
             kelly.fractional_kelly,
         )
 
@@ -883,16 +883,49 @@ class PolymarketArbitrageBot:
         )
         if not no_result.success:
             logger.error(
-                "DH NO leg failed after YES filled: %s — position is unhedged! "
-                "Manual intervention may be required.",
+                "DH NO leg failed after YES filled: %s — attempting to sell YES position.",
                 no_result.error,
             )
-            self.telegram.send_risk_alert(
-                "DHNoLegFailed",
-                f"DH YES leg filled but NO leg failed for {asset.upper()}. "
-                f"YES order: {yes_result.order_id}. Error: {no_result.error}",
-                severity="CRITICAL",
+            # Try to recover by selling the YES position so capital is returned.
+            yes_sell_result = await self.polymarket_client.place_market_order(
+                token_id=signal.yes_token_id,
+                side="SELL",
+                amount_usdc=yes_result.size,
+                market_info=signal.market,
             )
+            if yes_sell_result.success:
+                logger.warning(
+                    "DH YES leg sold back successfully after NO leg failure. "
+                    "Position unwound. YES order: %s",
+                    yes_result.order_id,
+                )
+                self.telegram.send_risk_alert(
+                    "DHNoLegFailed",
+                    f"DH NO leg failed for {asset.upper()} — YES position sold back. "
+                    f"YES order: {yes_result.order_id}. NO error: {no_result.error}",
+                    severity="WARNING",
+                )
+            else:
+                # Sell-back also failed — YES position is live and untracked.
+                # Deduct its cost from internal balance so subsequent risk checks
+                # are not based on an overstated balance.
+                yes_cost = yes_result.size * yes_result.price
+                self.risk_manager._current_balance -= yes_cost
+                logger.critical(
+                    "DH YES sell-back FAILED — unhedged YES position on Polymarket! "
+                    "Balance adjusted by -$%.2f. Manual close required. "
+                    "YES order: %s | Sell error: %s",
+                    yes_cost, yes_result.order_id, yes_sell_result.error,
+                )
+                self.telegram.send_risk_alert(
+                    "DHNoLegFailed",
+                    f"UNHEDGED YES position for {asset.upper()}! "
+                    f"YES order {yes_result.order_id} is live on Polymarket. "
+                    f"NO error: {no_result.error}. Sell-back error: {yes_sell_result.error}. "
+                    f"Close manually!",
+                    severity="CRITICAL",
+                )
+            self.dh_detector.reset_cooldown(asset)
             return
 
         # Acquire per-asset DH lock
