@@ -303,8 +303,9 @@ class EdgeDetector:
                 self._signals_generated / self._evaluations
                 if self._evaluations > 0 else 0.0
             ),
-            "last_signal_age_s": round(
-                time.time() - max(self._last_signal_time.values(), default=0.0), 1
+            "last_signal_age_s": (
+                round(time.time() - max(self._last_signal_time.values()), 1)
+                if self._last_signal_time else None
             ),
             "active_markets": active_markets,
             "assets_monitored": list(self.feeds.keys()),
