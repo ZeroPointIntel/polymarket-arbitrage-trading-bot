@@ -1286,13 +1286,17 @@ class PolymarketClient:
     async def redeem_positions(
         self,
         condition_id: str,
-        outcome_index: int,
     ) -> Dict[str, Any]:
         """
         Redeem winning conditional tokens for USDC directly on Polygon.
 
-        Calls the Polymarket CTF Exchange contract (redeemPositions selector
-        0x3d7d3f5a) with the correct index set for the winning outcome.
+        Calls the Polymarket ConditionalTokens contract (redeemPositions selector
+        0x01b7037c) with indexSets=[1, 2] to redeem both outcome slots at once.
+        The contract pays out whichever token the wallet actually holds;
+        the losing token pays $0 and the winning token pays $1/share.
+
+        This is the correct approach for both latency-arb (single leg) and
+        dump-hedge (both legs) — sending [1, 2] covers all cases.
 
         This is a LIVE-only operation — never called in paper mode.
         Should only be called after a market has resolved and the bot still
@@ -1300,7 +1304,6 @@ class PolymarketClient:
 
         Args:
             condition_id:   The market's conditionId (0x hex string).
-            outcome_index:  1 = UP/YES won, 2 = DOWN/NO won.
 
         Returns:
             Dict with keys: success (bool), tx_hash (str|None), message (str).
@@ -1325,12 +1328,17 @@ class PolymarketClient:
                 "Or add it to requirements.txt and run: make install"
             ) from exc
 
-        CTF_CONTRACT  = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
-        USDC_ADDRESS  = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-        RPC_URL       = "https://polygon-rpc.com"
-        REDEEM_SELECTOR = "0x3d7d3f5a"  # redeemPositions(IERC20,bytes32,bytes32,uint256[])
+        # ConditionalTokens contract on Polygon (not the Exchange contract).
+        # Same address for every market — only conditionId changes per window.
+        CTF_CONTRACT    = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+        # Native USDC on Polygon (Circle). The old bridged USDC.e
+        # (0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174) is no longer used by Polymarket.
+        USDC_ADDRESS    = "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
+        RPC_URL         = "https://polygon-rpc.com"
+        # MethodID for redeemPositions(address,bytes32,bytes32,uint256[])
+        REDEEM_SELECTOR = "0x01b7037c"
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _send_redeem() -> Dict[str, Any]:
             w3 = Web3(Web3.HTTPProvider(RPC_URL))
@@ -1339,28 +1347,29 @@ class PolymarketClient:
             account = w3.eth.account.from_key(self.private_key)
             wallet_address = account.address
 
-            # Build calldata for redeemPositions
-            # Signature: redeemPositions(collateralToken, parentCollectionId, conditionId, indexSets)
+            # Build ABI-encoded calldata for redeemPositions:
+            # redeemPositions(collateralToken, parentCollectionId, conditionId, indexSets)
             cid_clean = condition_id[2:] if condition_id.startswith("0x") else condition_id
-            cid_bytes32 = "0x" + cid_clean.zfill(64).lower()
+            cid_bytes32          = cid_clean.zfill(64).lower()
+            parent_collection_id = "0" * 64                          # bytes32 zero
+            collateral_bytes32   = "0" * 24 + USDC_ADDRESS[2:].lower()  # address padded to 32 bytes
 
-            parent_collection_id = "0x" + "0" * 64
-            collateral_bytes32   = "0x" + "0" * 24 + USDC_ADDRESS[2:].lower()
-
-            # indexSets encodes which outcome to redeem:
-            #   outcome_index=1 → indexSet=1 (first outcome slot, UP/YES)
-            #   outcome_index=2 → indexSet=2 (second outcome slot, DOWN/NO)
-            array_offset = 32 * 4   # offset to the indexSets[] dynamic array
-            array_length = 1        # one index set
-            index_set    = outcome_index
+            # indexSets = [1, 2] — redeem both outcome slots simultaneously.
+            # The contract pays out only the tokens the wallet holds:
+            #   slot 1 (indexSet=1, binary 01) = YES/UP outcome
+            #   slot 2 (indexSet=2, binary 10) = NO/DOWN outcome
+            # Sending both covers latency-arb (one leg) and dump-hedge (both legs).
+            array_offset = 32 * 4   # byte offset to the dynamic array (4 fixed params × 32 bytes)
+            array_length = 2        # two index sets: [1, 2]
 
             encoded = (
-                collateral_bytes32[2:].zfill(64) +
-                parent_collection_id[2:] +
-                cid_bytes32[2:].zfill(64) +
+                collateral_bytes32 +
+                parent_collection_id +
+                cid_bytes32 +
                 hex(array_offset)[2:].zfill(64) +
                 hex(array_length)[2:].zfill(64) +
-                hex(index_set)[2:].zfill(64)
+                hex(1)[2:].zfill(64) +   # indexSets[0] = 1 (YES/UP)
+                hex(2)[2:].zfill(64)     # indexSets[1] = 2 (NO/DOWN)
             )
             data = REDEEM_SELECTOR + encoded
 
@@ -1387,20 +1396,20 @@ class PolymarketClient:
             return {
                 "success":  True,
                 "tx_hash":  tx_hash.hex(),
-                "message":  f"Redeemed outcome {outcome_index} for condition {condition_id[:16]}. Tx: {tx_hash.hex()}",
+                "message":  f"Redeemed condition {condition_id[:16]}. Tx: {tx_hash.hex()}",
             }
 
         try:
             result = await loop.run_in_executor(None, _send_redeem)
             logger.info(
-                "redeem_positions ✓ | condition=%s | outcome_index=%d | tx=%s",
-                condition_id[:16], outcome_index, result["tx_hash"],
+                "redeem_positions ✓ | condition=%s | tx=%s",
+                condition_id[:16], result["tx_hash"],
             )
             return result
         except Exception as exc:
             logger.error(
-                "redeem_positions failed | condition=%s | outcome_index=%d | error=%s",
-                condition_id[:16], outcome_index, exc,
+                "redeem_positions failed | condition=%s | error=%s",
+                condition_id[:16], exc,
             )
             return {"success": False, "tx_hash": None, "message": str(exc)}
 
