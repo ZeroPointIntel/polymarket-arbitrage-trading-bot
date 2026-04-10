@@ -58,16 +58,29 @@ class TelegramAlerter:
     # Alert Methods
     # ─────────────────────────────────────────────────────────────────────────
 
-    def send_startup(self, paper_mode: bool, balance: float) -> None:
+    def send_startup(
+        self,
+        paper_mode: bool,
+        balance: float,
+        strategy: str = "latency_arb",
+        markets: Optional[list] = None,
+    ) -> None:
         """Send a startup notification."""
-        mode_label = "📄 PAPER MODE" if paper_mode else "🔴 LIVE MODE"
+        _STRATEGY_LABELS = {
+            "latency_arb": "Latency Arbitrage",
+            "dump_hedge":  "Dump-Hedge",
+            "both":        "Latency Arb + Dump-Hedge",
+        }
+        strat_label = _STRATEGY_LABELS.get(strategy, strategy.upper())
+        mode_label  = "📄 PAPER MODE" if paper_mode else "🔴 LIVE MODE"
+        markets_str = ", ".join(m.upper() for m in markets) if markets else "N/A"
         self._send(
             f"🤖 *Polymarket Arb Bot Started*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Mode: {mode_label}\n"
             f"Balance: `${balance:,.2f} USDC`\n"
-            f"Strategy: BTC Latency Arbitrage\n"
-            f"Lag Window: ~2.7 seconds\n"
+            f"Strategy: {strat_label}\n"
+            f"Markets: {markets_str}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"_OpenClaw Edition — Bot is running._"
         )
