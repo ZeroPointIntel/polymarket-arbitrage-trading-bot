@@ -95,6 +95,10 @@ class PolymarketArbitrageBot:
         self._sell_fail_count: dict = {}
         self.MAX_SELL_RETRIES = 3
 
+        # Track order_ids for which on-chain auto-redeem has been triggered.
+        # Prevents calling redeem_positions more than once per position.
+        self._auto_redeem_triggered: set = set()
+
         # Initialize all subsystems
         logger.info("Initializing bot subsystems... (strategy=%s)", config.strategy)
 
@@ -615,6 +619,7 @@ class PolymarketArbitrageBot:
             opened_at=order_result.timestamp,
             asset=trade_signal.asset,
             direction=trade_signal.direction,  # "UP" or "DOWN"
+            condition_id=trade_signal.market.condition_id,
             paper_mode=self.config.paper_mode,
         )
         self.risk_manager.register_trade_open(position)
@@ -700,11 +705,24 @@ class PolymarketArbitrageBot:
                 # ── Sell-retry gate ──────────────────────────────────────────
                 fail_count = self._sell_fail_count.get(order_id, 0)
                 if fail_count >= self.MAX_SELL_RETRIES:
-                    # Already notified after max retries — do not retry.
-                    logger.debug(
-                        "Skipping sell for %s — max retries (%d) already reached.",
-                        order_id[:20], self.MAX_SELL_RETRIES,
+                    # Sell exhausted — attempt on-chain redeem once the market
+                    # has had time to resolve (position age > timeout + 30s grace).
+                    past_resolution = (
+                        time.time() - position.opened_at
+                        > self.config.position_timeout_seconds + 30
                     )
+                    if (
+                        not self.config.paper_mode
+                        and position.condition_id
+                        and past_resolution
+                        and order_id not in self._auto_redeem_triggered
+                    ):
+                        asyncio.create_task(self._attempt_auto_redeem(position))
+                    else:
+                        logger.debug(
+                            "Skipping sell for %s — max retries (%d) reached.",
+                            order_id[:20], self.MAX_SELL_RETRIES,
+                        )
                     continue
 
                 logger.info("Closing position %s: %s", order_id[:20], exit_reason)
@@ -1111,6 +1129,73 @@ class PolymarketArbitrageBot:
                     reason,
                     risk_state=self.risk_manager.get_state(),
                 )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # On-chain Redemption Safety Net
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _attempt_auto_redeem(self, position: Position) -> None:
+        """
+        Last-resort on-chain redemption when all SELL retries are exhausted.
+
+        Called only in LIVE mode once the market window has resolved.
+        Calls redeemPositions() on Polygon to convert winning tokens → USDC,
+        then syncs the on-chain balance back to the risk manager.
+        """
+        order_id = position.order_id
+        self._auto_redeem_triggered.add(order_id)
+
+        logger.warning(
+            "AUTO-REDEEM triggered for %s | condition=%s | "
+            "position age=%.0fs",
+            order_id[:20], position.condition_id[:16],
+            time.time() - position.opened_at,
+        )
+
+        result = await self.polymarket_client.redeem_positions(position.condition_id)
+
+        if result["success"]:
+            # Close position at neutral price — update_balance below will
+            # correct the balance to the actual on-chain value.
+            self.risk_manager.register_trade_close(
+                order_id=order_id,
+                exit_price=0.5,
+            )
+            self._sell_fail_count.pop(order_id, None)
+            if position.asset:
+                self._asset_open_position.pop(position.asset, None)
+                if self.edge_detector is not None:
+                    self.edge_detector.reset_cooldown(position.asset)
+
+            # Sync actual on-chain balance to reflect redeemed USDC
+            new_balance = await self.polymarket_client.get_portfolio_balance()
+            if new_balance and new_balance > 0:
+                self.risk_manager.update_balance(new_balance)
+                logger.info(
+                    "Auto-redeem balance sync: $%.2f | tx=%s",
+                    new_balance, result.get("tx_hash", "")[:20],
+                )
+
+            self.telegram.send_risk_alert(
+                "AutoRedeemSuccess",
+                f"On-chain redeem OK for position {order_id[:12]}. "
+                f"Balance synced to ${new_balance:.2f}. "
+                f"Tx: {result.get('tx_hash', 'N/A')[:20]}",
+                severity="WARNING",
+            )
+        else:
+            logger.critical(
+                "AUTO-REDEEM FAILED for %s — manual action required! Error: %s",
+                order_id[:20], result["message"],
+            )
+            self.telegram.send_risk_alert(
+                "AutoRedeemFailed",
+                f"On-chain redeem FAILED for {order_id[:12]}. "
+                f"Tokens stuck on Polymarket. Manual close required!\n"
+                f"Condition: {position.condition_id}\n"
+                f"Error: {result['message']}",
+                severity="CRITICAL",
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
     # OpenClaw Command Handlers

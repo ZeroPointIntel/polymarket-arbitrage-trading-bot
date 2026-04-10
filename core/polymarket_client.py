@@ -1334,33 +1334,33 @@ class PolymarketClient:
         # Native USDC on Polygon (Circle). The old bridged USDC.e
         # (0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174) is no longer used by Polymarket.
         USDC_ADDRESS    = "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
-        RPC_URL         = "https://polygon-rpc.com"
+        # Multiple RPC endpoints — tried in order, first successful one is used.
+        RPC_URLS = [
+            "https://polygon-rpc.com",
+            "https://rpc.ankr.com/polygon",
+            "https://polygon-bor-rpc.publicnode.com",
+            "https://1rpc.io/matic",
+        ]
         # MethodID for redeemPositions(address,bytes32,bytes32,uint256[])
         REDEEM_SELECTOR = "0x01b7037c"
 
         loop = asyncio.get_running_loop()
 
         def _send_redeem() -> Dict[str, Any]:
-            w3 = Web3(Web3.HTTPProvider(RPC_URL))
-            w3.middleware_onion.inject(geth_poa_middleware, layer=0)
-
-            account = w3.eth.account.from_key(self.private_key)
-            wallet_address = account.address
-
-            # Build ABI-encoded calldata for redeemPositions:
+            # Build ABI-encoded calldata once — shared across all RPC attempts.
             # redeemPositions(collateralToken, parentCollectionId, conditionId, indexSets)
             cid_clean = condition_id[2:] if condition_id.startswith("0x") else condition_id
             cid_bytes32          = cid_clean.zfill(64).lower()
-            parent_collection_id = "0" * 64                          # bytes32 zero
-            collateral_bytes32   = "0" * 24 + USDC_ADDRESS[2:].lower()  # address padded to 32 bytes
+            parent_collection_id = "0" * 64
+            collateral_bytes32   = "0" * 24 + USDC_ADDRESS[2:].lower()
 
             # indexSets = [1, 2] — redeem both outcome slots simultaneously.
             # The contract pays out only the tokens the wallet holds:
             #   slot 1 (indexSet=1, binary 01) = YES/UP outcome
             #   slot 2 (indexSet=2, binary 10) = NO/DOWN outcome
             # Sending both covers latency-arb (one leg) and dump-hedge (both legs).
-            array_offset = 32 * 4   # byte offset to the dynamic array (4 fixed params × 32 bytes)
-            array_length = 2        # two index sets: [1, 2]
+            array_offset = 32 * 4
+            array_length = 2
 
             encoded = (
                 collateral_bytes32 +
@@ -1373,31 +1373,49 @@ class PolymarketClient:
             )
             data = REDEEM_SELECTOR + encoded
 
-            nonce = w3.eth.get_transaction_count(wallet_address)
-            gas_price = w3.eth.gas_price
+            last_exc: Exception = RuntimeError("No RPC endpoints available")
+            for rpc_url in RPC_URLS:
+                try:
+                    w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+                    w3.middleware_onion.inject(geth_poa_middleware, layer=0)
 
-            tx = {
-                "to":       CTF_CONTRACT,
-                "data":     data,
-                "value":    0,
-                "gas":      200_000,
-                "gasPrice": gas_price,
-                "nonce":    nonce,
-                "chainId":  137,  # Polygon mainnet
-            }
+                    account = w3.eth.account.from_key(self.private_key)
+                    wallet_address = account.address
 
-            signed = account.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
-            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+                    nonce     = w3.eth.get_transaction_count(wallet_address)
+                    gas_price = w3.eth.gas_price
 
-            if not receipt.get("status"):
-                raise RuntimeError(f"Redemption tx reverted: {tx_hash.hex()}")
+                    tx = {
+                        "to":       CTF_CONTRACT,
+                        "data":     data,
+                        "value":    0,
+                        "gas":      200_000,
+                        "gasPrice": gas_price,
+                        "nonce":    nonce,
+                        "chainId":  137,
+                    }
 
-            return {
-                "success":  True,
-                "tx_hash":  tx_hash.hex(),
-                "message":  f"Redeemed condition {condition_id[:16]}. Tx: {tx_hash.hex()}",
-            }
+                    signed   = account.sign_transaction(tx)
+                    tx_hash  = w3.eth.send_raw_transaction(signed.rawTransaction)
+                    receipt  = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+
+                    if not receipt.get("status"):
+                        raise RuntimeError(f"Tx reverted: {tx_hash.hex()}")
+
+                    logger.info("redeem_positions: used RPC %s", rpc_url)
+                    return {
+                        "success": True,
+                        "tx_hash": tx_hash.hex(),
+                        "message": f"Redeemed condition {condition_id[:16]}. Tx: {tx_hash.hex()}",
+                    }
+                except Exception as exc:
+                    logger.warning(
+                        "redeem_positions: RPC %s failed — %s. Trying next...",
+                        rpc_url, exc,
+                    )
+                    last_exc = exc
+
+            raise last_exc
 
         try:
             result = await loop.run_in_executor(None, _send_redeem)

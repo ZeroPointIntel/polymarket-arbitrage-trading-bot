@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from core.binance_ws import BinanceWebSocketFeed
+from core.market_utils import get_seconds_remaining as _get_secs_remaining
 from core.polymarket_client import MarketInfo, PolymarketClient
 from utils.logger import get_logger
 
@@ -483,54 +484,11 @@ class EdgeDetector:
 
     def _get_seconds_remaining(self, market: MarketInfo) -> Optional[float]:
         """
-        Estimate seconds remaining in the 5-minute window.
-
-        Priority order for end time:
-          1. Compute from slug timestamp (most reliable — exact 5-min boundary)
-          2. Parse end_date_iso from Gamma API (accurate)
-          3. Parse end_date_iso from CLOB API (unreliable — often wrong date)
-
-        Note: The CLOB API's end_date_iso is frequently wrong (e.g., returns
-        "2026-03-30T00:00:00Z" instead of the actual window close time).
-        Always prefer the Gamma endDate or slug-derived timestamp.
+        Estimate seconds remaining in the current market window.
+        Delegates to core.market_utils.get_seconds_remaining — single source of truth
+        shared with DumpHedgeDetector.
         """
-        from datetime import datetime, timezone
-        now_dt = datetime.now(timezone.utc)
-
-        ws = int(self._window_seconds)  # 300 or 900
-
-        # Strategy 1: Parse end_date_iso — use only if it looks like a real window time
-        # (i.e., not midnight UTC which is the CLOB API bug)
-        end_str = market.end_date_iso
-        if end_str:
-            try:
-                clean = end_str.replace("Z", "+00:00")
-                end_dt = datetime.fromisoformat(clean)
-                # Sanity check: reject if end time is midnight UTC (CLOB API bug)
-                is_midnight = end_dt.hour == 0 and end_dt.minute == 0 and end_dt.second == 0
-                if not is_midnight:
-                    remaining = (end_dt - now_dt).total_seconds()
-                    # Accept if within [-1 min, window + 1.5 min]
-                    if -60 < remaining < ws + 90:
-                        return max(0.0, remaining)
-                    logger.debug(
-                        "end_date_iso '%s' gives %.0fs remaining — out of range for %ds window, ignoring.",
-                        end_str, remaining, ws,
-                    )
-            except Exception as exc:
-                logger.debug("Could not parse end_date '%s': %s", end_str, exc)
-
-        # Strategy 2: Fallback — align to the nearest UTC window boundary.
-        now_ts_float = now_dt.timestamp()
-        current_window_open = (int(now_ts_float) // ws) * ws
-        current_window_close = current_window_open + ws
-        remaining = current_window_close - now_ts_float
-        logger.debug(
-            "Fallback: using UTC %ds boundary for seconds_remaining: %.0fs "
-            "(end_date_iso was unreliable or midnight: '%s')",
-            ws, remaining, end_str,
-        )
-        return max(0.0, remaining)
+        return _get_secs_remaining(market, self._window_seconds)
 
     async def _evaluate_5m_market(
         self,

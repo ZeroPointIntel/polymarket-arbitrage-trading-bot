@@ -47,6 +47,7 @@ class Position:
     opened_at: float
     asset: str = ""          # "btc", "eth", or "sol" — used to release per-asset lock
     direction: str = ""      # "UP" or "DOWN" — which outcome token was bought
+    condition_id: str = ""   # market conditionId (0x hex) — needed for on-chain redeem
     closed_at: Optional[float] = None
     exit_price: Optional[float] = None
     pnl_usdc: Optional[float] = None
