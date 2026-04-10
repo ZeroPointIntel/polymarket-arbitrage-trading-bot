@@ -794,7 +794,8 @@ class PolymarketClient:
             )
             response.raise_for_status()
             data = response.json()
-            return float(data.get("price", 0.0))
+            price = float(data.get("price", 0.0))
+            return price if price > 0.0 else None
         except Exception as exc:
             # 404 = token no longer tradeable (market resolved/expired) → DEBUG only
             # Other errors stay at WARNING so they're visible in the dashboard

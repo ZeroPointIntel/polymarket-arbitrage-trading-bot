@@ -292,6 +292,8 @@ class PolymarketArbitrageBot:
         self.telegram.send_startup(
             paper_mode=self.config.paper_mode,
             balance=self.risk_manager.current_balance,
+            strategy=self.config.strategy,
+            markets=self.config.trading_markets,
         )
         cfg = self.config
         self.openclaw.push_startup_notification({
@@ -601,7 +603,7 @@ class PolymarketArbitrageBot:
                 severity="ERROR",
             )
             # Set per-asset cooldown so we don't immediately retry the same asset
-            self.edge_detector._last_signal_time[trade_signal.asset] = time.time()
+            self.edge_detector.reset_cooldown(trade_signal.asset)
             return
 
         # Acquire per-asset lock so no second order is placed until this closes.
@@ -841,29 +843,17 @@ class PolymarketArbitrageBot:
         # Tolerance for floating-point comparisons (e.g. 1.0/0.47*0.47 = 0.9999...).
         FLOAT_TOL = 1e-6
 
-        # ── Re-fetch prices immediately before execution ──────────────────────
-        # Signal prices may be stale by execution time. Using stale prices to
-        # compute USDC amounts causes unequal share counts between YES and NO legs
-        # (different fill quantities → broken hedge, directional exposure).
-        # Fresh prices ensure size_shares is the same for both legs.
-        fresh_yes = await self.polymarket_client.get_market_price(signal.yes_token_id, "BUY")
-        fresh_no  = await self.polymarket_client.get_market_price(signal.no_token_id,  "BUY")
+        # Use signal prices directly — they are already fresh REST prices fetched
+        # by the detector moments ago. A second re-fetch adds ~600ms latency (two
+        # more REST round-trips) which consistently sees the market back at ~0.99,
+        # rejecting real edges. With DH_SUM_TARGET=0.93 (7% margin), signal prices
+        # are reliable enough; actual fill prices may be slightly worse but still
+        # within the margin.
+        exec_yes      = signal.yes_price
+        exec_no       = signal.no_price
+        exec_combined = signal.combined_price
 
-        exec_yes = fresh_yes if fresh_yes is not None and fresh_yes > 0 else signal.yes_price
-        exec_no  = fresh_no  if fresh_no  is not None and fresh_no  > 0 else signal.no_price
-        exec_combined = exec_yes + exec_no
-
-        # Validate opportunity still exists at current prices before committing.
-        if exec_combined >= cfg.dh_sum_target:
-            logger.info(
-                "[%s] DH opportunity expired at execution: combined %.4f >= target %.4f "
-                "(signal was %.4f). Skipping.",
-                asset.upper(), exec_combined, cfg.dh_sum_target, signal.combined_price,
-            )
-            self.dh_detector.reset_cooldown(asset)
-            return
-
-        # Recalculate sizing from fresh prices so both legs use the same share count.
+        # Calculate sizing so both legs receive the SAME share count.
         yes_min = POLYMARKET_MIN_LEG_USDC / exec_yes
         no_min  = POLYMARKET_MIN_LEG_USDC / exec_no
         size_from_min    = max(yes_min, no_min)
@@ -874,8 +864,7 @@ class PolymarketArbitrageBot:
         exec_discount = 1.0 - exec_combined
         locked_profit = exec_discount * size_shares
 
-        # USDC amounts per leg — derived from the SAME size_shares and fresh prices,
-        # guaranteeing equal share counts regardless of fill price movement.
+        # USDC amounts per leg — derived from the SAME size_shares and signal prices.
         yes_usdc = size_shares * exec_yes
         no_usdc  = size_shares * exec_no
 

@@ -324,3 +324,10 @@ class BotConfig:
                     f"RISK_MAX_POSITION_FRACTION cap (${max_safe:.2f}). "
                     f"Lower the fixed bet or raise RISK_MAX_POSITION_FRACTION."
                 )
+        # Dump-hedge minimum bet: each leg needs at least $1.00, so combined >= $2.00.
+        if self.strategy in ("dump_hedge", "both") and self.dh_fixed_bet_usdc < 2.0:
+            raise ValueError(
+                f"DH_FIXED_BET_USDC (${self.dh_fixed_bet_usdc:.2f}) is too small. "
+                "Polymarket requires a minimum of $1.00 per leg, so DH_FIXED_BET_USDC "
+                "must be at least $2.00. Recommended: $10.00 or higher."
+            )

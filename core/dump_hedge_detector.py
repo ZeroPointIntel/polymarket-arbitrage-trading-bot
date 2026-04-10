@@ -169,17 +169,17 @@ class DumpHedgeDetector:
             )
             return None
 
-        # Fetch fresh BUY prices for both legs
+        # Fetch fresh BUY prices for both legs via REST (or WS cache if available).
+        # Never fall back to stale discovery-cache prices — they can be minutes old
+        # and produce false signals (signal says 0.91, execution sees real 0.99).
         yes_price = await self.polymarket_client.get_market_price(market.yes_token_id, "BUY")
         no_price  = await self.polymarket_client.get_market_price(market.no_token_id,  "BUY")
 
-        # Fall back to cached prices from last market discovery
-        if yes_price is None:
-            yes_price = market.yes_price
-        if no_price is None:
-            no_price = market.no_price
-
         if yes_price is None or no_price is None or yes_price <= 0 or no_price <= 0:
+            logger.debug(
+                "[%s] DH skip %s: price unavailable (yes=%s no=%s)",
+                asset.upper(), market.question[:40], yes_price, no_price,
+            )
             return None
 
         combined = yes_price + no_price
