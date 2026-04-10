@@ -837,31 +837,56 @@ class PolymarketArbitrageBot:
             return
 
         cfg = self.config
-        # Polymarket enforces a $1.00 minimum per order leg.
-        # size_shares must be large enough that BOTH legs each cost ≥ $1.00,
-        # while total cost stays within DH_FIXED_BET_USDC.
         POLYMARKET_MIN_LEG_USDC = 1.00
-        # Minimum shares to satisfy the $1.00 floor on each leg
-        yes_min = POLYMARKET_MIN_LEG_USDC / signal.yes_price
-        no_min  = POLYMARKET_MIN_LEG_USDC / signal.no_price
-        size_from_min = max(yes_min, no_min)  # satisfies both legs' minimums
-        # Maximum shares allowed by the configured bet budget
-        size_from_budget = cfg.dh_fixed_bet_usdc / signal.combined_price
-        size_shares = min(size_from_min, size_from_budget)
+        # Tolerance for floating-point comparisons (e.g. 1.0/0.47*0.47 = 0.9999...).
+        FLOAT_TOL = 1e-6
 
-        combined_cost = signal.combined_price * size_shares
-        locked_profit = signal.discount * size_shares
+        # ── Re-fetch prices immediately before execution ──────────────────────
+        # Signal prices may be stale by execution time. Using stale prices to
+        # compute USDC amounts causes unequal share counts between YES and NO legs
+        # (different fill quantities → broken hedge, directional exposure).
+        # Fresh prices ensure size_shares is the same for both legs.
+        fresh_yes = await self.polymarket_client.get_market_price(signal.yes_token_id, "BUY")
+        fresh_no  = await self.polymarket_client.get_market_price(signal.no_token_id,  "BUY")
 
-        # Guard: if budget can't cover the $1 minimum per leg, skip this signal
-        yes_cost = size_shares * signal.yes_price
-        no_cost  = size_shares * signal.no_price
-        if yes_cost < POLYMARKET_MIN_LEG_USDC or no_cost < POLYMARKET_MIN_LEG_USDC:
+        exec_yes = fresh_yes if fresh_yes is not None and fresh_yes > 0 else signal.yes_price
+        exec_no  = fresh_no  if fresh_no  is not None and fresh_no  > 0 else signal.no_price
+        exec_combined = exec_yes + exec_no
+
+        # Validate opportunity still exists at current prices before committing.
+        if exec_combined >= cfg.dh_sum_target:
+            logger.info(
+                "[%s] DH opportunity expired at execution: combined %.4f >= target %.4f "
+                "(signal was %.4f). Skipping.",
+                asset.upper(), exec_combined, cfg.dh_sum_target, signal.combined_price,
+            )
+            self.dh_detector.reset_cooldown(asset)
+            return
+
+        # Recalculate sizing from fresh prices so both legs use the same share count.
+        yes_min = POLYMARKET_MIN_LEG_USDC / exec_yes
+        no_min  = POLYMARKET_MIN_LEG_USDC / exec_no
+        size_from_min    = max(yes_min, no_min)
+        size_from_budget = cfg.dh_fixed_bet_usdc / exec_combined
+        size_shares      = min(size_from_min, size_from_budget)
+
+        combined_cost = exec_combined * size_shares
+        exec_discount = 1.0 - exec_combined
+        locked_profit = exec_discount * size_shares
+
+        # USDC amounts per leg — derived from the SAME size_shares and fresh prices,
+        # guaranteeing equal share counts regardless of fill price movement.
+        yes_usdc = size_shares * exec_yes
+        no_usdc  = size_shares * exec_no
+
+        # Guard: budget can't cover the $1.00 minimum per leg.
+        # Use FLOAT_TOL to absorb floating-point rounding (1.0/p*p ≈ 0.9999...).
+        if yes_usdc < POLYMARKET_MIN_LEG_USDC - FLOAT_TOL or no_usdc < POLYMARKET_MIN_LEG_USDC - FLOAT_TOL:
             logger.warning(
                 "DH signal skipped — budget $%.2f too small for $1.00 min per leg "
-                "(YES $%.2f + NO $%.2f required). Raise DH_FIXED_BET_USDC.",
+                "(need ≥$%.2f combined). Raise DH_FIXED_BET_USDC.",
                 cfg.dh_fixed_bet_usdc,
-                1.00 / signal.yes_price * signal.combined_price,
-                1.00 / signal.no_price  * signal.combined_price,
+                (POLYMARKET_MIN_LEG_USDC / exec_yes + POLYMARKET_MIN_LEG_USDC / exec_no) * exec_combined,
             )
             return
 
@@ -876,15 +901,15 @@ class PolymarketArbitrageBot:
         logger.info(
             "Opening DH position %s | %s | YES@%.3f + NO@%.3f | "
             "%.4f shares | Cost: $%.2f | Locked profit: $%.2f",
-            dh_id, asset.upper(), signal.yes_price, signal.no_price,
+            dh_id, asset.upper(), exec_yes, exec_no,
             size_shares, combined_cost, locked_profit,
         )
 
-        # Place YES (BUY) leg
+        # Place YES (BUY) leg — amount sized from fresh exec price
         yes_result = await self.polymarket_client.place_market_order(
             token_id=signal.yes_token_id,
             side="BUY",
-            amount_usdc=size_shares * signal.yes_price,
+            amount_usdc=yes_usdc,
             market_info=signal.market,
         )
         if not yes_result.success:
@@ -892,11 +917,11 @@ class PolymarketArbitrageBot:
             self.dh_detector.reset_cooldown(asset)
             return
 
-        # Place NO (BUY) leg
+        # Place NO (BUY) leg — same size_shares, amount from fresh exec price
         no_result = await self.polymarket_client.place_market_order(
             token_id=signal.no_token_id,
             side="BUY",
-            amount_usdc=size_shares * signal.no_price,
+            amount_usdc=no_usdc,
             market_info=signal.market,
         )
         if not no_result.success:
@@ -949,6 +974,8 @@ class PolymarketArbitrageBot:
         # Acquire per-asset DH lock
         self._asset_open_dh_position[asset] = dh_id
 
+        # Use actual fill prices from order results for accurate PnL tracking.
+        actual_combined = yes_result.price + no_result.price
         position = DumpHedgePosition(
             dh_id=dh_id,
             yes_order_id=yes_result.order_id,
@@ -959,20 +986,21 @@ class PolymarketArbitrageBot:
             asset=asset,
             yes_entry_price=yes_result.price,
             no_entry_price=no_result.price,
-            combined_entry_price=yes_result.price + no_result.price,
+            combined_entry_price=actual_combined,
             size_shares=size_shares,
-            combined_cost_usdc=(yes_result.price + no_result.price) * size_shares,
-            locked_profit_usdc=signal.discount * size_shares,
+            combined_cost_usdc=actual_combined * size_shares,
+            locked_profit_usdc=(1.0 - actual_combined) * size_shares,
             opened_at=time.time(),
             paper_mode=cfg.paper_mode,
         )
         self.risk_manager.register_dh_open(position)
 
+        actual_locked_pct = position.locked_profit_usdc / position.combined_cost_usdc if position.combined_cost_usdc > 0 else 0.0
         self.telegram.send_message(
             f"{'📄' if cfg.paper_mode else '🔒'} *DH Opened* | {asset.upper()} | "
             f"YES@{yes_result.price:.3f} + NO@{no_result.price:.3f} | "
             f"Combined: {position.combined_entry_price:.3f} | "
-            f"Locked: ${locked_profit:.2f} ({signal.discount_pct:.1%} ROI) | "
+            f"Locked: ${position.locked_profit_usdc:.2f} ({actual_locked_pct:.1%} ROI) | "
             f"{'PAPER' if cfg.paper_mode else 'LIVE'}"
         )
         self.openclaw.push_dh_opened(
