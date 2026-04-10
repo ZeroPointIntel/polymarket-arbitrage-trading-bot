@@ -126,7 +126,14 @@ class DumpHedgeDetector:
         return best
 
     async def _evaluate_asset(self, asset: str) -> Optional[DumpHedgeSignal]:
-        """Check a single asset for a combined price below the sum target."""
+        """
+        Check all active markets for an asset and return the one with the
+        highest locked discount, or None if no opportunity exists.
+
+        Loops all returned markets instead of only the first so that the bot
+        captures the best structural edge when multiple windows are active
+        simultaneously (e.g., during a 5-min/15-min transition period).
+        """
         markets = await self.polymarket_client.get_active_markets(
             asset=asset,
             min_liquidity=self.min_market_liquidity,
@@ -136,15 +143,29 @@ class DumpHedgeDetector:
             self._active_market_by_asset[asset] = None
             return None
 
-        market = markets[0]
-        self._active_market_by_asset[asset] = market
+        best: Optional[DumpHedgeSignal] = None
 
+        for market in markets:
+            signal = await self._check_market_dh(asset, market)
+            if signal is None:
+                continue
+            if best is None or signal.discount > best.discount:
+                best = signal
+
+        # Update dashboard cache with the best market found (or None)
+        self._active_market_by_asset[asset] = best.market if best else None
+        return best
+
+    async def _check_market_dh(
+        self, asset: str, market: object
+    ) -> Optional[DumpHedgeSignal]:
+        """Evaluate a single market for a dump-hedge opportunity."""
         # Timing check — don't enter too close to expiry
         secs = get_seconds_remaining(market, self._window_seconds)
         if secs is None or secs < self.min_seconds_remaining:
             logger.debug(
-                "[%s] DH skip: %.0fs remaining < %.0fs minimum",
-                asset.upper(), secs or 0, self.min_seconds_remaining,
+                "[%s] DH skip %s: %.0fs remaining < %.0fs minimum",
+                asset.upper(), market.question[:40], secs or 0, self.min_seconds_remaining,
             )
             return None
 
