@@ -17,9 +17,10 @@
 
 import datetime
 import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Deque, Dict, List, Optional
 
 from utils.logger import get_logger
 
@@ -119,6 +120,10 @@ class RiskState:
     win_rate: float
     kill_switch_triggered: bool
     daily_halt_triggered: bool
+    circuit_breaker_active: bool
+    circuit_breaker_resume_at: float
+    la_pnl: float
+    dh_pnl: float
 
 
 class RiskManager:
@@ -139,6 +144,11 @@ class RiskManager:
         daily_loss_limit: float = 0.20,
         total_drawdown_kill: float = 0.40,
         max_concurrent_positions: int = 3,
+        circuit_breaker_enabled: bool = True,
+        circuit_breaker_min_losses: int = 3,
+        circuit_breaker_window: int = 5,
+        circuit_breaker_loss_pct: float = 0.02,
+        circuit_breaker_pause_seconds: float = 300.0,
     ) -> None:
         """
         Args:
@@ -152,6 +162,10 @@ class RiskManager:
         self.daily_loss_limit = daily_loss_limit
         self.total_drawdown_kill = total_drawdown_kill
         self.max_concurrent_positions = max_concurrent_positions
+        self.circuit_breaker_enabled = circuit_breaker_enabled
+        self.circuit_breaker_min_losses = circuit_breaker_min_losses
+        self.circuit_breaker_loss_pct = circuit_breaker_loss_pct
+        self.circuit_breaker_pause_seconds = circuit_breaker_pause_seconds
 
         # Balance tracking
         self._starting_balance: float = starting_balance
@@ -177,6 +191,13 @@ class RiskManager:
         self._winning_trades: int = 0
         self._total_pnl: float = 0.0
         self._total_dh_trades: int = 0
+        # Per-strategy PnL attribution
+        self._la_pnl: float = 0.0
+        self._dh_pnl: float = 0.0
+
+        # Circuit breaker: rolling window of recent PnL values + timed-pause state
+        self._recent_pnls: Deque[float] = deque(maxlen=circuit_breaker_window)
+        self._circuit_breaker_resume_at: float = 0.0
 
         logger.info(
             "RiskManager initialized | Balance: $%.2f | "
@@ -199,6 +220,7 @@ class RiskManager:
     def is_trading_allowed(self) -> bool:
         """Return True if the bot is allowed to place new trades."""
         self._check_daily_reset()
+        self._check_circuit_breaker_resume()
         return self._status == TradingStatus.ACTIVE
 
     @property
@@ -290,6 +312,7 @@ class RiskManager:
             self._current_balance += position.cost_usdc + pnl
         position.pnl_usdc = pnl
         self._total_pnl += pnl
+        self._la_pnl += pnl
 
         if pnl > 0:
             self._winning_trades += 1
@@ -311,6 +334,8 @@ class RiskManager:
 
         # Check risk thresholds after every close
         self._check_risk_thresholds()
+        self._recent_pnls.append(pnl)
+        self._check_circuit_breaker()
 
         return position
 
@@ -400,6 +425,7 @@ class RiskManager:
             self._current_balance += position.combined_cost_usdc + pnl
         position.pnl_usdc = pnl
         self._total_pnl += pnl
+        self._dh_pnl += pnl
 
         if pnl > 0:
             self._winning_trades += 1
@@ -418,6 +444,8 @@ class RiskManager:
         )
 
         self._check_risk_thresholds()
+        self._recent_pnls.append(pnl)
+        self._check_circuit_breaker()
         return position
 
     def update_balance(self, new_balance: float) -> None:
@@ -436,6 +464,15 @@ class RiskManager:
             new_balance - old,
         )
         self._check_risk_thresholds()
+
+    def set_daily_starting_balance(self, balance: float) -> None:
+        """
+        Set the daily starting balance baseline used for daily-loss-limit checks.
+        Call once at bot startup after syncing live balance from the chain.
+        Must be called BEFORE update_balance() so _check_risk_thresholds sees 0% daily loss.
+        """
+        self._daily_starting_balance = balance
+        logger.debug("Daily starting balance set to $%.2f", balance)
 
     def pause(self, reason: str = "Manual pause") -> None:
         """Pause trading (can be resumed)."""
@@ -526,6 +563,13 @@ class RiskManager:
             win_rate=self.win_rate,
             kill_switch_triggered=(self._status == TradingStatus.KILLED),
             daily_halt_triggered=(self._status == TradingStatus.DAILY_HALT),
+            circuit_breaker_active=(
+                self._status == TradingStatus.PAUSED
+                and self._circuit_breaker_resume_at > 0
+            ),
+            circuit_breaker_resume_at=self._circuit_breaker_resume_at,
+            la_pnl=self._la_pnl,
+            dh_pnl=self._dh_pnl,
         )
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -560,6 +604,63 @@ class RiskManager:
                     f"Daily start: ${self._daily_starting_balance:.2f} → "
                     f"Current: ${self._current_balance:.2f}"
                 )
+
+    def _check_circuit_breaker(self) -> None:
+        """
+        Trigger a timed trading pause if recent losses exceed the circuit breaker threshold.
+
+        Fires when ALL of the following are true:
+          - circuit_breaker_enabled is True
+          - At least circuit_breaker_min_losses of the last N trades are losses
+          - The cumulative loss of those trades > circuit_breaker_loss_pct * current_balance
+          - Bot is currently ACTIVE (don't stack pauses)
+        """
+        if not self.circuit_breaker_enabled:
+            return
+        if self._status != TradingStatus.ACTIVE:
+            return
+        if len(self._recent_pnls) < self.circuit_breaker_min_losses:
+            return
+
+        losses = [p for p in self._recent_pnls if p < 0]
+        if len(losses) < self.circuit_breaker_min_losses:
+            return
+
+        cumulative_loss = abs(sum(losses))
+        threshold = self._current_balance * self.circuit_breaker_loss_pct
+        if cumulative_loss < threshold:
+            return
+
+        resume_at = time.time() + self.circuit_breaker_pause_seconds
+        self._circuit_breaker_resume_at = resume_at
+        self._status = TradingStatus.PAUSED
+        self._kill_reason = (
+            f"Circuit breaker: {len(losses)} losses in last {len(self._recent_pnls)} trades, "
+            f"cumulative loss ${cumulative_loss:.2f} > {self.circuit_breaker_loss_pct:.0%} "
+            f"of balance. Pausing {self.circuit_breaker_pause_seconds:.0f}s."
+        )
+        logger.warning(
+            "CIRCUIT BREAKER triggered — trading paused for %.0fs. "
+            "%d/%d recent trades are losses, cumulative $%.2f. Resumes at %s UTC.",
+            self.circuit_breaker_pause_seconds,
+            len(losses),
+            len(self._recent_pnls),
+            cumulative_loss,
+            datetime.datetime.utcfromtimestamp(resume_at).strftime("%H:%M:%S"),
+        )
+
+    def _check_circuit_breaker_resume(self) -> None:
+        """Auto-resume after circuit breaker pause expires."""
+        if (
+            self._status == TradingStatus.PAUSED
+            and self._circuit_breaker_resume_at > 0
+            and time.time() >= self._circuit_breaker_resume_at
+        ):
+            self._circuit_breaker_resume_at = 0.0
+            self._status = TradingStatus.ACTIVE
+            self._kill_reason = None
+            self._recent_pnls.clear()  # Reset window after pause
+            logger.info("Circuit breaker pause expired — trading RESUMED.")
 
     def _trigger_kill_switch(self, reason: str) -> None:
         """Trigger the permanent kill switch."""

