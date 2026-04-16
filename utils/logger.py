@@ -1,11 +1,11 @@
 """
-Logging utilities — re-exported from the genosys toolkit.
+Logging utilities — re-exported from the chainutils toolkit.
 Custom print_banner kept for the Polymarket bot ASCII art.
 """
 
 import sys
 
-from genosys.log import (
+from chainutils.log import (
     get_logger,
     setup_logging,
     disable_console_logging,
