@@ -84,6 +84,7 @@ class PolymarketWSFeed:
         # Tasks
         self._feed_task: Optional[asyncio.Task] = None
         self._ping_task: Optional[asyncio.Task] = None
+        self._cache_evict_task: Optional[asyncio.Task] = None
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public API
@@ -95,6 +96,7 @@ class PolymarketWSFeed:
             return
         self._running = True
         self._feed_task = asyncio.create_task(self._run_forever(), name="pm_ws_feed")
+        self._cache_evict_task = asyncio.create_task(self._evict_stale_prices(), name="pm_ws_cache_evict")
         logger.info("PolymarketWSFeed started.")
 
     async def stop(self) -> None:
@@ -106,6 +108,8 @@ class PolymarketWSFeed:
             self._feed_task.cancel()
         if self._ping_task:
             self._ping_task.cancel()
+        if self._cache_evict_task:
+            self._cache_evict_task.cancel()
         logger.info("PolymarketWSFeed stopped.")
 
     def subscribe(self, condition_id: str) -> None:
@@ -349,6 +353,10 @@ class PolymarketWSFeed:
         except (ValueError, TypeError):
             return
 
+        if not (0.0 <= price <= 1.0):
+            logger.debug("PM WS: Ignoring out-of-range price %.4f for token %s", price, token_id[:16])
+            return
+
         # Update cache
         self._prices[token_id] = {"price": price, "side": side, "ts": ts}
         self._total_updates += 1
@@ -410,9 +418,54 @@ class PolymarketWSFeed:
     # Internal: Subscription
     # ─────────────────────────────────────────────────────────────────────────
 
+    async def _evict_stale_prices(self) -> None:
+        """
+        Background task (every 60s):
+          1. Evict price cache entries older than STALE_PRICE_TTL.
+          2. Subscription heartbeat — re-subscribe any condition IDs whose prices
+             have gone stale while the WS is still reported as connected (zombie
+             connection detection).
+        """
+        while self._running:
+            await asyncio.sleep(60)
+            now = time.time()
+
+            # ── Evict stale entries ──────────────────────────────────────────
+            stale = [tid for tid, e in self._prices.items() if now - e["ts"] > self.STALE_PRICE_TTL]
+            for tid in stale:
+                del self._prices[tid]
+            if stale:
+                logger.debug("PM WS: Evicted %d stale price cache entries.", len(stale))
+
+            # ── Subscription heartbeat ───────────────────────────────────────
+            # If connected but no messages in 2× STALE_PRICE_TTL, the connection
+            # may be a zombie. Force close so _run_forever reconnects and re-subscribes.
+            if (
+                self._ws is not None
+                and not self._ws.closed
+                and self._last_message_ts > 0
+                and (now - self._last_message_ts) > self.STALE_PRICE_TTL * 2
+                and self._subscribed
+            ):
+                logger.warning(
+                    "PM WS: No messages for %.0fs (threshold %.0fs) — "
+                    "zombie connection suspected, forcing reconnect.",
+                    now - self._last_message_ts,
+                    self.STALE_PRICE_TTL * 2,
+                )
+                try:
+                    await self._ws.close()
+                except Exception:
+                    pass
+
     async def _send_subscribe(self, condition_ids: list) -> None:
         """Send a subscribe message for the given condition IDs."""
         if not self._ws or self._ws.closed:
+            logger.debug(
+                "PM WS: _send_subscribe skipped (WS not connected) — "
+                "will replay on next reconnect: %s",
+                ", ".join(c[:12] for c in condition_ids[:3]),
+            )
             return
         msg = {
             "type": "subscribe",

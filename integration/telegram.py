@@ -5,6 +5,7 @@
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
@@ -239,6 +240,55 @@ class TelegramAlerter:
             f"Current balance: `${balance:,.2f} USDC`\n"
             f"Trading will resume at midnight UTC."
         )
+
+    def send_daily_summary(self, risk_state: Any, uptime_seconds: float = 0.0) -> None:
+        """
+        Send end-of-day performance summary with win rate confidence interval.
+
+        Win rate CI uses Wilson score interval (95%) — robust for small samples.
+        """
+        rs = risk_state
+        pnl_icon = "📈" if rs.daily_pnl >= 0 else "📉"
+        total_closed = rs.total_trades + rs.total_dh_trades
+        wr = rs.win_rate
+
+        # Wilson score 95% confidence interval for win rate
+        ci_str = ""
+        if total_closed >= 5:
+            z = 1.96
+            n = total_closed
+            p_hat = wr
+            denom = 1 + z ** 2 / n
+            centre = (p_hat + z ** 2 / (2 * n)) / denom
+            margin = (z * math.sqrt(p_hat * (1 - p_hat) / n + z ** 2 / (4 * n ** 2))) / denom
+            ci_lo = max(0.0, centre - margin)
+            ci_hi = min(1.0, centre + margin)
+            ci_str = f" (95% CI: {ci_lo:.0%}–{ci_hi:.0%})"
+            trades_needed = ""
+            if (ci_hi - ci_lo) > 0.10 and n < 200:
+                more = max(0, int((z / 0.05) ** 2 * wr * (1 - wr)) - n)
+                trades_needed = f"\n_Need ~{more} more trades for CI width < 10%_"
+        else:
+            ci_str = " (too few trades for CI)"
+            trades_needed = ""
+
+        uptime_h = uptime_seconds / 3600
+        lines = [
+            f"📊 *Daily Summary*",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"Daily PnL:   {pnl_icon} `${rs.daily_pnl:+.2f}` ({rs.daily_pnl_pct:+.1%})",
+            f"Total PnL:   `${rs.total_pnl:+.2f}` ({rs.total_pnl_pct:+.1%})",
+            f"Balance:     `${rs.current_balance:,.2f}` (Peak: `${rs.peak_balance:,.2f}`)",
+            f"Drawdown:    `{rs.drawdown_from_peak_pct:.1%}`",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"Trades:      `{total_closed}` (LA: {rs.total_trades} · DH: {rs.total_dh_trades})",
+            f"Win Rate:    `{wr:.1%}`{ci_str}",
+        ]
+        if trades_needed:
+            lines.append(trades_needed)
+        if uptime_h > 0:
+            lines.append(f"Uptime:      `{uptime_h:.1f}h`")
+        self._send("\n".join(lines), priority=True)
 
     def send_message(self, text: str) -> None:
         """Send a raw text message (for custom notifications)."""

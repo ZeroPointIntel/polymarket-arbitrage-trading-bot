@@ -144,6 +144,10 @@ RISK_FIXED_BET_USDC: float = float(os.getenv("RISK_FIXED_BET_USDC", "0.0"))
 # KELLY_ENABLED=true  → use Kelly formula to size each bet (ignores RISK_FIXED_BET_USDC)
 # KELLY_ENABLED=false → use RISK_FIXED_BET_USDC as a fixed bet amount
 KELLY_ENABLED: bool = os.getenv("KELLY_ENABLED", "false").lower() == "true"
+# KELLY_ADAPTIVE_ENABLED=true → scale Kelly fraction up/down based on recent win rate.
+#   Reduces bet size when win_rate < 45% (model underperforming), scales up slightly
+#   when win_rate > 55% (model outperforming). Floor is RISK_KELLY_FRACTION * 0.1.
+KELLY_ADAPTIVE_ENABLED: bool = os.getenv("KELLY_ADAPTIVE_ENABLED", "false").lower() == "true"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Position Exit Thresholds (Stop Loss / Take Profit)
@@ -182,6 +186,9 @@ POSITION_TIMEOUT_SECONDS: float = (
 # ─────────────────────────────────────────────────────────────────────────────
 PAPER_MODE: bool = os.getenv("PAPER_MODE", "true").lower() == "true"
 PAPER_STARTING_BALANCE: float = float(os.getenv("PAPER_STARTING_BALANCE", "1000.0"))
+# Inject random fill slippage in paper mode to simulate real market conditions.
+# 0.005 = ±0.5% noise on fill price (adverse direction). 0.0 = disabled.
+PAPER_SLIPPAGE_PCT: float = float(os.getenv("PAPER_SLIPPAGE_PCT", "0.005"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OpenClaw Agent Integration
@@ -206,6 +213,8 @@ TELEGRAM_ENABLED: bool = os.getenv("TELEGRAM_ENABLED", "true").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE: str = os.getenv("LOG_FILE", "polymarket_bot.log")
 DASHBOARD_LOG_LINES: int = int(os.getenv("DASHBOARD_LOG_LINES", "20"))
+# Directory where daily trade CSV files are written. Set to "" to disable export.
+TRADES_CSV_DIR: str = os.getenv("TRADES_CSV_DIR", "trades")
 
 
 @dataclass
@@ -260,6 +269,8 @@ class BotConfig:
     risk_fixed_bet_usdc: float = RISK_FIXED_BET_USDC
     # Kelly toggle: true = Kelly formula, false = fixed bet
     kelly_enabled: bool = KELLY_ENABLED
+    # Adaptive Kelly: scale fraction based on recent win rate
+    kelly_adaptive_enabled: bool = KELLY_ADAPTIVE_ENABLED
 
     # Exit thresholds
     take_profit_price: float = TAKE_PROFIT_PRICE
@@ -272,6 +283,7 @@ class BotConfig:
     # Paper mode
     paper_mode: bool = PAPER_MODE
     paper_starting_balance: float = PAPER_STARTING_BALANCE
+    paper_slippage_pct: float = PAPER_SLIPPAGE_PCT
 
     # OpenClaw
     openclaw_enabled: bool = OPENCLAW_ENABLED
@@ -289,6 +301,7 @@ class BotConfig:
     log_level: str = LOG_LEVEL
     log_file: str = LOG_FILE
     dashboard_log_lines: int = DASHBOARD_LOG_LINES
+    trades_csv_dir: str = TRADES_CSV_DIR
 
     def validate(self) -> None:
         """Validate critical configuration values before starting the bot."""

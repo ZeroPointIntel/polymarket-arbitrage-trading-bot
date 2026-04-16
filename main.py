@@ -16,6 +16,8 @@ Environment:
 
 import argparse
 import asyncio
+import csv
+import os
 import signal
 import sys
 import time
@@ -99,6 +101,13 @@ class PolymarketArbitrageBot:
         # Prevents calling redeem_positions more than once per position.
         self._auto_redeem_triggered: set = set()
 
+        # Tracks whether a "no markets found" Telegram alert was already sent per asset.
+        # Resets when the market is found again so a follow-up alert fires if it recurs.
+        self._market_empty_alerted: dict = {}  # asset → bool
+
+        # Daily summary: track last UTC date the summary was sent (YYYY-MM-DD string).
+        self._last_daily_summary_date: str = ""
+
         # Initialize all subsystems
         logger.info("Initializing bot subsystems... (strategy=%s)", config.strategy)
 
@@ -140,6 +149,7 @@ class PolymarketArbitrageBot:
             signature_type=config.polymarket_signature_type,
             paper_mode=config.paper_mode,
             trade_window_minutes=config.trade_window_minutes,
+            paper_slippage_pct=config.paper_slippage_pct if config.paper_mode else 0.0,
         )
 
         # ── Edge detector (latency-arb) ───────────────────────────────────────
@@ -181,6 +191,7 @@ class PolymarketArbitrageBot:
             kelly_fraction=config.risk_kelly_fraction,
             max_position_fraction=config.risk_max_position_fraction,
             fixed_bet_usdc=_fixed_bet,
+            adaptive_kelly_enabled=config.kelly_adaptive_enabled,
         )
 
         # Live balance fetched async in run() — use config default here
@@ -273,7 +284,7 @@ class PolymarketArbitrageBot:
             if live_balance is not None and live_balance > 0:
                 # Set baseline BEFORE update_balance so _check_risk_thresholds
                 # sees 0% daily loss instead of comparing against stale config value.
-                self.risk_manager._daily_starting_balance = live_balance
+                self.risk_manager.set_daily_starting_balance(live_balance)
                 self.risk_manager.update_balance(live_balance)
                 # Clear daily halt if triggered by stale config balance at startup
                 if self.risk_manager._status == TradingStatus.DAILY_HALT:
@@ -325,6 +336,10 @@ class PolymarketArbitrageBot:
             for t in feed_tasks:
                 t.cancel()
             pm_ws_task.cancel()
+            # Await all cancelled tasks so their cleanup completes before
+            # closing the HTTP client (prevents dangling requests mid-flight).
+            await asyncio.gather(*feed_tasks, pm_ws_task, return_exceptions=True)
+            await self.polymarket_client.close()
             logger.info("Bot shutdown complete.")
 
     async def _main_loop(self) -> None:
@@ -410,6 +425,41 @@ class PolymarketArbitrageBot:
                     dh_signal = await self.dh_detector.evaluate()
                     if dh_signal:
                         await self._handle_dh_signal(dh_signal)
+
+                # 3c. Alert if market discovery has been empty too long (both strategies failed)
+                _EMPTY_ALERT_THRESHOLD = 10  # ~5 minutes at 30s cache TTL
+                for _asset in self.config.trading_markets:
+                    _empty = self.polymarket_client._consecutive_empty_by_asset.get(_asset, 0)
+                    if _empty >= _EMPTY_ALERT_THRESHOLD and not self._market_empty_alerted.get(_asset):
+                        logger.critical(
+                            "[%s] Market discovery has returned empty %d consecutive times "
+                            "— slug scan and Gamma search both failing. Check API connectivity.",
+                            _asset.upper(), _empty,
+                        )
+                        self.telegram.send_risk_alert(
+                            "MarketDiscoveryFailed",
+                            f"[{_asset.upper()}] No active markets found for {_empty} consecutive "
+                            f"fetches — both slug scan and Gamma search returning empty. "
+                            f"Bot is NOT trading this asset. Check API connectivity.",
+                            severity="CRITICAL",
+                        )
+                        self._market_empty_alerted[_asset] = True
+                    elif _empty == 0:
+                        # Market found again — reset alert so it fires again if it recurs
+                        self._market_empty_alerted[_asset] = False
+
+                # 3d. Daily summary at midnight UTC (once per calendar day)
+                import datetime as _datetime_mod
+                _today_utc = _datetime_mod.datetime.utcnow().strftime("%Y-%m-%d")
+                if _today_utc != self._last_daily_summary_date and self._last_daily_summary_date:
+                    self.telegram.send_daily_summary(
+                        risk_state=self.risk_manager.get_state(),
+                        uptime_seconds=now - self._start_time,
+                    )
+                    self._export_trades_csv(self._last_daily_summary_date)
+                    self._last_daily_summary_date = _today_utc
+                elif not self._last_daily_summary_date:
+                    self._last_daily_summary_date = _today_utc
 
                 # 4. Periodically check open positions for exit conditions
                 if now - self._last_position_check >= self.POSITION_CHECK_INTERVAL:
@@ -575,6 +625,7 @@ class PolymarketArbitrageBot:
             bankroll=self.risk_manager.current_balance,
             win_probability=win_prob,
             current_price=trade_entry_price,
+            historical_win_rate=self.risk_manager.win_rate or None,
         )
 
         if kelly is None:
@@ -822,6 +873,19 @@ class PolymarketArbitrageBot:
                     )
                     self.openclaw.push_kill_switch_alert(reason)
 
+                risk_state = self.risk_manager.get_state()
+                if risk_state.circuit_breaker_active:
+                    import datetime as _dt
+                    resume_str = _dt.datetime.utcfromtimestamp(
+                        risk_state.circuit_breaker_resume_at
+                    ).strftime("%H:%M:%S UTC")
+                    self.telegram.send_risk_alert(
+                        "CircuitBreaker",
+                        f"Circuit breaker triggered — trading paused until {resume_str}. "
+                        f"Reason: {self.risk_manager._kill_reason}",
+                        severity="WARNING",
+                    )
+
     # ─────────────────────────────────────────────────────────────────────────
     # Dump-Hedge Execution
     # ─────────────────────────────────────────────────────────────────────────
@@ -942,7 +1006,7 @@ class PolymarketArbitrageBot:
                 # Deduct its cost from internal balance so subsequent risk checks
                 # are not based on an overstated balance.
                 yes_cost = yes_result.size * yes_result.price
-                self.risk_manager._current_balance -= yes_cost
+                self.risk_manager.update_balance(self.risk_manager._current_balance - yes_cost)
                 logger.critical(
                     "DH YES sell-back FAILED — unhedged YES position on Polymarket! "
                     "Balance adjusted by -$%.2f. Manual close required. "
@@ -1099,6 +1163,42 @@ class PolymarketArbitrageBot:
                 amount_usdc=position.size_shares,
             )
 
+            yes_ok = yes_sell_result.success
+            no_ok  = no_sell_result.success
+
+            if not cfg.paper_mode and not (yes_ok and no_ok):
+                # At least one leg failed — tokens may still be held on-chain.
+                # Do NOT close the position with partial proceeds; leave it open
+                # so the next loop iteration retries the failing leg.
+                if not yes_ok and not no_ok:
+                    logger.critical(
+                        "DH BOTH LEGS FAILED to sell for %s (%s) — position left open for "
+                        "retry or manual redemption. YES error: %s | NO error: %s",
+                        dh_id[:20], position.asset.upper(),
+                        yes_sell_result.error, no_sell_result.error,
+                    )
+                    self.telegram.send_risk_alert(
+                        "DHBothLegsFailed",
+                        f"DH BOTH legs failed for {position.asset.upper()} ({dh_id[:20]}). "
+                        f"YES: {yes_sell_result.error} | NO: {no_sell_result.error}",
+                        severity="CRITICAL",
+                    )
+                else:
+                    failed_leg  = "YES" if not yes_ok else "NO"
+                    failed_err  = yes_sell_result.error if not yes_ok else no_sell_result.error
+                    logger.warning(
+                        "DH %s leg failed for %s (%s) — position left open for retry. "
+                        "Error: %s",
+                        failed_leg, dh_id[:20], position.asset.upper(), failed_err,
+                    )
+                    self.telegram.send_risk_alert(
+                        "DHOneLegFailed",
+                        f"DH {failed_leg} leg failed for {position.asset.upper()} "
+                        f"({dh_id[:20]}) — retrying. Error: {failed_err}",
+                        severity="WARNING",
+                    )
+                continue
+
             actual_proceeds: Optional[float] = None
             if not cfg.paper_mode:
                 yes_proceeds = yes_sell_result.size * yes_sell_result.price if yes_sell_result.success else 0.0
@@ -1145,6 +1245,19 @@ class PolymarketArbitrageBot:
                 self.telegram.send_kill_switch_alert(
                     reason,
                     risk_state=self.risk_manager.get_state(),
+                )
+
+            dh_risk_state = self.risk_manager.get_state()
+            if dh_risk_state.circuit_breaker_active:
+                import datetime as _dt
+                resume_str = _dt.datetime.utcfromtimestamp(
+                    dh_risk_state.circuit_breaker_resume_at
+                ).strftime("%H:%M:%S UTC")
+                self.telegram.send_risk_alert(
+                    "CircuitBreaker",
+                    f"Circuit breaker triggered — trading paused until {resume_str}. "
+                    f"Reason: {self.risk_manager._kill_reason}",
+                    severity="WARNING",
                 )
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1284,6 +1397,124 @@ class PolymarketArbitrageBot:
                 if token_id == mkt.no_token_id:
                     mkt.no_price = price
                     return
+
+    def _export_trades_csv(self, date_str: str) -> None:
+        """
+        Dump all trades closed on *date_str* (YYYY-MM-DD, UTC) to a CSV file.
+
+        File path:  {config.trades_csv_dir}/trades_{date_str}.csv
+        Appends to an existing file so partial-day runs are additive.
+        Skips trades already written (deduplicates on the 'id' column by
+        reading existing rows first).
+        """
+        trades_dir = self.config.trades_csv_dir
+        os.makedirs(trades_dir, exist_ok=True)
+        filepath = os.path.join(trades_dir, f"trades_{date_str}.csv")
+
+        FIELDS = [
+            "type", "id", "asset", "strategy_detail", "market_question",
+            "entry_price", "exit_price", "size_shares", "cost_usdc", "pnl_usdc",
+            "locked_profit_usdc", "opened_at_utc", "closed_at_utc",
+            "duration_seconds", "exit_reason", "paper_mode",
+        ]
+
+        # Collect IDs already written to avoid duplicates on repeated daily triggers.
+        existing_ids: set = set()
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, newline="", encoding="utf-8") as fh:
+                    reader = csv.DictReader(fh)
+                    for row in reader:
+                        existing_ids.add(row.get("id", ""))
+            except Exception:
+                pass  # Corrupt file or missing header — will be overwritten below
+
+        rows: list = []
+
+        def _utc(ts: Optional[float]) -> str:
+            if ts is None:
+                return ""
+            import datetime as _dt
+            return _dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # LA positions
+        for pos in self.risk_manager._closed_positions:
+            if pos.closed_at is None:
+                continue
+            import datetime as _dt
+            closed_date = _dt.datetime.utcfromtimestamp(pos.closed_at).strftime("%Y-%m-%d")
+            if closed_date != date_str:
+                continue
+            if pos.order_id in existing_ids:
+                continue
+            rows.append({
+                "type": "LA",
+                "id": pos.order_id,
+                "asset": pos.asset,
+                "strategy_detail": pos.direction,
+                "market_question": pos.market_question,
+                "entry_price": f"{pos.entry_price:.6f}",
+                "exit_price": f"{pos.exit_price:.6f}" if pos.exit_price is not None else "",
+                "size_shares": f"{pos.size_shares:.6f}",
+                "cost_usdc": f"{pos.cost_usdc:.4f}",
+                "pnl_usdc": f"{pos.pnl_usdc:.4f}" if pos.pnl_usdc is not None else "",
+                "locked_profit_usdc": "",
+                "opened_at_utc": _utc(pos.opened_at),
+                "closed_at_utc": _utc(pos.closed_at),
+                "duration_seconds": f"{pos.duration_seconds:.1f}",
+                "exit_reason": "",
+                "paper_mode": str(pos.paper_mode),
+            })
+
+        # DH positions
+        for pos in self.risk_manager._closed_dh_positions:
+            if pos.closed_at is None:
+                continue
+            import datetime as _dt
+            closed_date = _dt.datetime.utcfromtimestamp(pos.closed_at).strftime("%Y-%m-%d")
+            if closed_date != date_str:
+                continue
+            if pos.dh_id in existing_ids:
+                continue
+            combined_exit = (
+                (pos.yes_exit_price or 0.0) + (pos.no_exit_price or 0.0)
+                if pos.yes_exit_price is not None or pos.no_exit_price is not None
+                else None
+            )
+            rows.append({
+                "type": "DH",
+                "id": pos.dh_id,
+                "asset": pos.asset,
+                "strategy_detail": "YES+NO",
+                "market_question": pos.market_question,
+                "entry_price": f"{pos.combined_entry_price:.6f}",
+                "exit_price": f"{combined_exit:.6f}" if combined_exit is not None else "",
+                "size_shares": f"{pos.size_shares:.6f}",
+                "cost_usdc": f"{pos.combined_cost_usdc:.4f}",
+                "pnl_usdc": f"{pos.pnl_usdc:.4f}" if pos.pnl_usdc is not None else "",
+                "locked_profit_usdc": f"{pos.locked_profit_usdc:.4f}",
+                "opened_at_utc": _utc(pos.opened_at),
+                "closed_at_utc": _utc(pos.closed_at),
+                "duration_seconds": f"{pos.duration_seconds:.1f}",
+                "exit_reason": pos.exit_reason,
+                "paper_mode": str(pos.paper_mode),
+            })
+
+        if not rows:
+            return
+
+        write_header = not os.path.exists(filepath) or os.path.getsize(filepath) == 0
+        try:
+            with open(filepath, "a", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=FIELDS)
+                if write_header:
+                    writer.writeheader()
+                writer.writerows(rows)
+            logger.info(
+                "CSV export: wrote %d trade(s) to %s", len(rows), filepath
+            )
+        except Exception as exc:
+            logger.error("CSV export failed: %s", exc)
 
     def _subscribe_pm_ws_to_market(self, market: MarketInfo) -> None:
         """

@@ -506,10 +506,25 @@ def _risk_status(rs, engine_config: dict) -> Panel:
     dl_style = "bold red" if dl_used > 0.7 else ("yellow" if dl_used > 0.4 else "dim")
     dl_str  = (f"${dl_usdc:,.0f} ({dl_used:.0%} used)" if dl_usdc else "N/A")
 
+    # PnL attribution (LA vs DH) — only show breakdown when both strategies ran
+    la_pnl = getattr(rs, "la_pnl", None)
+    dh_pnl = getattr(rs, "dh_pnl", None)
+    la_s = ("+" if (la_pnl or 0) >= 0 else "")
+    dh_s = ("+" if (dh_pnl or 0) >= 0 else "")
+    la_c = "green" if (la_pnl or 0) >= 0 else "red"
+    dh_c = "green" if (dh_pnl or 0) >= 0 else "red"
+
     rows = [
         ("Balance",      Text(f"${rs.current_balance:.2f} USDC", style=f"bold {bal_c}")),
         ("Daily PnL",    Text(f"{ds}${rs.daily_pnl:.2f}", style=f"bold {dc}")),
         ("Total PnL",    Text(f"{ps}${rs.total_pnl:.2f}", style=f"bold {pc}")),
+    ]
+    if la_pnl is not None and dh_pnl is not None and (rs.total_trades > 0 or rs.total_dh_trades > 0):
+        rows += [
+            ("  LA PnL",  Text(f"{la_s}${la_pnl:.2f}", style=f"dim {la_c}")),
+            ("  DH PnL",  Text(f"{dh_s}${dh_pnl:.2f}", style=f"dim {dh_c}")),
+        ]
+    rows += [
         ("Win Rate",     Text(f"{wins}/{total_trades} ({rs.win_rate:.0%})", style="white")),
         ("Open Pos",     Text(f"{total_open} / {max_pos}", style="white")),
         ("DH Trades",    Text(f"{rs.total_dh_trades} total", style="white")),
