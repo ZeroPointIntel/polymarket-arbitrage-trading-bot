@@ -17,7 +17,6 @@ requests>=2.31.0,<3.0.0
 httpx[http2]>=0.25.0,<1.0.0          # async HTTP + HTTP/2 support
 
 # ── Genoshide toolkit ─────────────────────────────────────────────────────────
-gw @ git+https://github.com/genoshide/gw.git
 solanakit @ git+https://github.com/genoshide/solanakit.git
 
 # ── Environment & config ──────────────────────────────────────────────────────
