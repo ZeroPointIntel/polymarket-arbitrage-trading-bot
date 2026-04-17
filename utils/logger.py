@@ -1,11 +1,11 @@
 """
-Logging utilities — re-exported from the chainutils toolkit.
+Logging utilities — re-exported from the solanakit toolkit.
 Custom print_banner kept for the Polymarket bot ASCII art.
 """
 
 import sys
 
-from chainutils.log import (
+from solanakit.log import (
     get_logger,
     setup_logging,
     disable_console_logging,

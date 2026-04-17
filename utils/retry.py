@@ -1,5 +1,5 @@
 """
-Retry decorators — re-exported from the chainutils toolkit.
+Retry decorators — re-exported from the solanakit toolkit.
 
 Usage:
     from utils.retry import async_retry, sync_retry, RetryError
@@ -9,6 +9,6 @@ Usage:
         ...
 """
 
-from chainutils.retry import async_retry, sync_retry, RetryError
+from solanakit.retry import async_retry, sync_retry, RetryError
 
 __all__ = ["async_retry", "sync_retry", "RetryError"]
