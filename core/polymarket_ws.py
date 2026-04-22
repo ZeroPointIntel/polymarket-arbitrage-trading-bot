@@ -174,8 +174,9 @@ class PolymarketWSFeed:
 
     async def _run_forever(self) -> None:
         """Main reconnect loop — runs until stop() is called."""
-        _geo_block_count = 0
-        _GEO_BLOCK_GIVE_UP = 3  # stop retrying after 3 consecutive rejections
+        _hard_reject_count = 0
+        _HARD_REJECT_BACKOFF = 3   # long backoff after this many consecutive 403/451
+        _HARD_REJECT_SLEEP   = 300 # seconds — retry after 5 min instead of giving up
         while self._running:
             try:
                 await self._connect_and_run()
@@ -188,47 +189,56 @@ class PolymarketWSFeed:
                     break
 
                 exc_name = type(exc).__name__
-                exc_str = str(exc)
+                exc_str  = str(exc)
 
-                # Detect geo-restriction / HTTP 403 / 451 / InvalidStatus
-                # These will never succeed with the same IP — give up after a
-                # few retries and switch to permanent REST-only mode.
-                is_geo_block = (
-                    exc_name in ("InvalidStatus", "InvalidStatusCode")
-                    or "403" in exc_str
-                    or "451" in exc_str
-                    or "rejected" in exc_str.lower()
-                )
+                # Classify the error precisely.
+                # Only HTTP 403 (forbidden) and 451 (legal block) are genuine
+                # geo/auth rejections.  5xx, 404, and generic InvalidStatus are
+                # transient server or routing errors — retry with normal backoff.
+                http_status = 0
+                if exc_name in ("InvalidStatus", "InvalidStatusCode"):
+                    # websockets attaches the HTTP response to the exception
+                    resp = getattr(exc, "response", None)
+                    if resp is not None:
+                        http_status = getattr(resp, "status_code", 0) or getattr(resp, "status", 0)
+                    if not http_status:
+                        for code in (403, 451, 404, 500, 503):
+                            if str(code) in exc_str:
+                                http_status = code
+                                break
 
-                if is_geo_block:
-                    _geo_block_count += 1
-                    if _geo_block_count == 1:
+                is_hard_reject = http_status in (403, 451)
+
+                if is_hard_reject:
+                    _hard_reject_count += 1
+                    logger.warning(
+                        "PM WS: HTTP %d — connection rejected (attempt %d/%d). "
+                        "Will retry in %ds.",
+                        http_status, _hard_reject_count,
+                        _HARD_REJECT_BACKOFF, _HARD_REJECT_SLEEP,
+                    )
+                    if _hard_reject_count >= _HARD_REJECT_BACKOFF:
                         logger.warning(
-                            "PM WS: Connection rejected (%s) — "
-                            "geo-restricted IP. Retrying %d more time(s) then "
-                            "switching to REST-only mode. Run on a VPS in "
-                            "Singapore to resolve permanently.",
-                            exc_str[:60], _GEO_BLOCK_GIVE_UP - 1,
+                            "PM WS: %d consecutive rejections — backing off %ds "
+                            "then retrying. REST fallback active in the meantime.",
+                            _hard_reject_count, _HARD_REJECT_SLEEP,
                         )
-                    if _geo_block_count >= _GEO_BLOCK_GIVE_UP:
-                        logger.warning(
-                            "PM WS: Giving up after %d rejections — "
-                            "switching to permanent REST-only mode. "
-                            "Price updates every ~300ms instead of ~20ms. "
-                            "Bot continues to function normally.",
-                            _geo_block_count,
-                        )
-                        self._running = False
-                        break
-                    await asyncio.sleep(60.0)
+                        _hard_reject_count = 0
+                        self._reconnect_delay = self.RECONNECT_BASE_DELAY
+                        await asyncio.sleep(_HARD_REJECT_SLEEP)
+                    else:
+                        await asyncio.sleep(30.0)
                     continue
 
+                # Transient error — reset hard-reject counter, use exponential backoff
+                _hard_reject_count = 0
                 logger.warning(
-                    "PM WS: Disconnected (%s). Reconnecting in %.0fs...",
-                    exc_name, self._reconnect_delay,
+                    "PM WS: Disconnected (%s%s). Reconnecting in %.0fs...",
+                    exc_name,
+                    f" HTTP {http_status}" if http_status else "",
+                    self._reconnect_delay,
                 )
                 await asyncio.sleep(self._reconnect_delay)
-                # Exponential backoff
                 self._reconnect_delay = min(
                     self._reconnect_delay * 2, self.RECONNECT_MAX_DELAY
                 )
@@ -250,6 +260,10 @@ class PolymarketWSFeed:
             ping_interval=None,   # We handle pings manually
             ping_timeout=None,
             max_size=2**20,       # 1MB max message size
+            additional_headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                "Origin": "https://polymarket.com",
+            },
         ) as ws:
             self._ws = ws
             self._reconnect_delay = self.RECONNECT_BASE_DELAY  # Reset on success
