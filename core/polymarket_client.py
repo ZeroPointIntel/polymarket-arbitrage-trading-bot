@@ -12,6 +12,7 @@ import json
 import random
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -288,12 +289,10 @@ class PolymarketClient:
         """
         Use Gamma Events API to search for active {asset}-updown-{Nm} events.
         """
-        from datetime import datetime, timezone
         now_dt = datetime.fromtimestamp(now_ts, tz=timezone.utc)
         slug_prefix = f"{asset}-updown-{self._slug_suffix}"
 
-        from datetime import datetime as _dt
-        end_date_min = _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_date_min = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
             resp = await self._get(
                 f"{self.GAMMA_API_URL}/events",
@@ -377,8 +376,6 @@ class PolymarketClient:
         All 4 candidates (prev/current/next 2 windows) are probed concurrently
         via asyncio.gather — total latency = 1 HTTP round-trip instead of 4.
         """
-        from datetime import datetime, timezone
-
         ws = self._window_seconds
         base = (now_ts // ws) * ws
         offsets = [-1, 0, 1, 2]
@@ -415,8 +412,6 @@ class PolymarketClient:
         now_ts: int,
     ) -> Optional["MarketInfo"]:
         """Probe a single {asset}-updown-{Nm}-{ts} slug. Returns MarketInfo or None."""
-        from datetime import datetime
-
         slug = f"{asset}-updown-{self._slug_suffix}-{ts}"
         try:
             gamma_resp = await self._get(
@@ -497,7 +492,6 @@ class PolymarketClient:
         if not end_date_iso:
             return None
         try:
-            from datetime import datetime, timezone
             end_dt = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00"))
             now_dt = datetime.fromtimestamp(now_ts, tz=timezone.utc)
             return (end_dt - now_dt).total_seconds()
@@ -883,7 +877,17 @@ class PolymarketClient:
         timestamp = time.time()
         is_buy = side.upper() == "BUY"
 
-        current_price = (await self.get_market_price(token_id, side)) or 0.5
+        current_price = await self.get_market_price(token_id, side)
+        if not current_price:
+            logger.warning(
+                "price lookup failed for token=%s side=%s — order aborted",
+                token_id[:16], side,
+            )
+            return OrderResult(
+                order_id="", status="error", token_id=token_id,
+                side=side, price=0.0, size=0.0, paper_mode=self.paper_mode,
+                timestamp=time.time(), error="price unavailable",
+            )
 
         if is_buy:
             # amount_usdc = USDC to spend; enforce $1.00 minimum
@@ -1110,11 +1114,30 @@ class PolymarketClient:
                 )
 
             if side.upper() == "BUY":
-                cost_usdc     = amount_usdc
-                size_matched  = round(amount_usdc / price, 6) if price > 0 else 0.0
-                price_matched = price
-                logger.debug("[LIVE] BUY fill — estimated: %.6f shares @ %.4f",
-                             size_matched, price_matched)
+                cost_usdc = amount_usdc
+                # Back-calculate fill price from makingAmount so Position.size_shares
+                # reflects the actual fill rather than the pre-order estimate.
+                making_raw = response.get("makingAmount") or response.get("making_amount")
+                confirmed_price: float | None = None
+                if making_raw is not None:
+                    try:
+                        mv = float(making_raw)
+                        if mv > 100:           # raw format: shares in 1e6 units
+                            mv /= 1_000_000
+                        if 0.0 < mv < 1_000_000:
+                            confirmed_price = round(amount_usdc / mv, 6) if mv > 0 else None
+                    except (ValueError, TypeError):
+                        pass
+                price_matched = confirmed_price if confirmed_price and 0.001 < confirmed_price < 1.0 else price
+                size_matched  = round(amount_usdc / price_matched, 6) if price_matched > 0 else 0.0
+                if confirmed_price and abs(confirmed_price - price) > 0.001:
+                    logger.info(
+                        "[LIVE] BUY fill — confirmed: %.6f shares @ %.4f (estimated %.4f)",
+                        size_matched, price_matched, price,
+                    )
+                else:
+                    logger.debug("[LIVE] BUY fill — estimated: %.6f shares @ %.4f",
+                                 size_matched, price_matched)
             else:
                 size_matched = shares
 

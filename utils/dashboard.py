@@ -526,6 +526,29 @@ def _risk_status(rs, engine_config: dict) -> Panel:
         ]
     rows += [
         ("Win Rate",     Text(f"{wins}/{total_trades} ({rs.win_rate:.0%})", style="white")),
+    ]
+
+    # Per-asset breakdown
+    asset_stats = getattr(rs, "asset_stats", None) or {}
+    _ASSET_STYLE = {"btc": "yellow", "eth": "cyan", "sol": "magenta", "xrp": "green"}
+    for asset, st in asset_stats.items():
+        if st["trades"] == 0:
+            continue
+        a_pnl = st["pnl"]
+        a_sign = "+" if a_pnl >= 0 else ""
+        a_col  = "green" if a_pnl >= 0 else "red"
+        a_sym  = _ASSET_STYLE.get(asset.lower(), "white")
+        wr_col = "green" if st["win_rate"] >= 0.55 else ("yellow" if st["win_rate"] >= 0.45 else "red")
+        rows.append((
+            f"  {asset.upper()}",
+            Text.assemble(
+                Text(f"{st['wins']}/{st['trades']} ", style="white"),
+                Text(f"({st['win_rate']:.0%})", style=f"bold {wr_col}"),
+                Text(f"  {a_sign}${a_pnl:.2f}", style=a_col),
+            ),
+        ))
+
+    rows += [
         ("Open Pos",     Text(f"{total_open} / {max_pos}", style="white")),
         ("DH Trades",    Text(f"{rs.total_dh_trades} total", style="white")),
         ("Max Drawdown", Text(f"${rs.drawdown_from_peak:.2f} ({rs.drawdown_from_peak_pct:.1%})", style=draw_c)),

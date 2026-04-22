@@ -45,6 +45,8 @@ class TelegramAlerter:
 
         self._last_send_time: float = 0.0
         self._messages_sent: int = 0
+        self._pending_count: int = 0
+        self._MAX_QUEUE: int = 50
         self._base_url = TELEGRAM_API_BASE.format(token=bot_token)
         # Single-worker pool — messages are queued and sent in order without
         # blocking the asyncio event loop.
@@ -54,6 +56,27 @@ class TelegramAlerter:
             logger.info("TelegramAlerter initialized | Chat ID: %s", chat_id)
         else:
             logger.info("TelegramAlerter DISABLED (no token/chat ID configured).")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Helpers
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _sanitize(text: str) -> str:
+        """Strip characters that break Telegram legacy Markdown parsing.
+
+        Backticks inside a code span close it early; asterisks and underscores
+        outside a span trigger unmatched bold/italic and cause HTTP 400 errors.
+        Replacing them with visually similar Unicode keeps messages readable.
+        """
+        return (
+            str(text)
+            .replace("`", "'")
+            .replace("*", "×")
+            .replace("_", "-")
+            .replace("[", "(")
+            .replace("]", ")")
+        )
 
     # ─────────────────────────────────────────────────────────────────────────
     # Alert Methods
@@ -108,12 +131,12 @@ class TelegramAlerter:
         self._send(
             f"{mode_icon} *Trade Opened*{token_str}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Market: `{market_question[:60]}`\n"
+            f"Market: `{self._sanitize(market_question[:60])}`\n"
             f"Price: `{price:.4f}` ({price * 100:.1f}¢)\n"
             f"Size: `${size_usdc:.2f} USDC`\n"
             f"Edge: `{edge:.4f}` ({edge * 100:.2f}%)\n"
             f"Move: {move_icon} `${btc_move:+.2f}`\n"
-            f"Order ID: `{order_id[:20]}`",
+            f"Order ID: `{self._sanitize(order_id[:20])}`",
             priority=True,
         )
 
@@ -158,8 +181,8 @@ class TelegramAlerter:
             lines.append(f"Exit Price: `{exit_price:.4f}`")
         lines.append(f"Duration: `{dur_str}`")
         if exit_reason:
-            lines.append(f"Reason: _{exit_reason}_")
-        lines.append(f"Order ID: `{order_id[:20]}`")
+            lines.append(f"Reason: {self._sanitize(exit_reason)}")
+        lines.append(f"Order ID: `{self._sanitize(order_id[:20])}`")
 
         self._send("\n".join(lines), priority=True)
 
@@ -197,10 +220,10 @@ class TelegramAlerter:
         }
         icon = severity_icons.get(severity, "⚠️")
         self._send(
-            f"{icon} *Risk Alert: {alert_type}*\n"
+            f"{icon} *Risk Alert: {self._sanitize(alert_type)}*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Severity: *{severity}*\n"
-            f"Message: {message}"
+            f"Message: {self._sanitize(message)}"
         )
 
     def send_kill_switch_alert(self, reason: str, risk_state: Any = None) -> None:
@@ -210,7 +233,7 @@ class TelegramAlerter:
             "━━━━━━━━━━━━━━━━━━━━",
             "ALL TRADING HALTED",
             "",
-            f"Reason:\n`{reason}`",
+            f"Reason:\n`{self._sanitize(reason)}`",
         ]
         if risk_state is not None:
             pnl_icon = "📈" if risk_state.total_pnl >= 0 else "📉"
@@ -286,13 +309,39 @@ class TelegramAlerter:
         ]
         if trades_needed:
             lines.append(trades_needed)
+
+        # Per-asset breakdown — only when multiple assets traded
+        asset_stats = getattr(rs, "asset_stats", None) or {}
+        active_assets = {a: s for a, s in asset_stats.items() if s["trades"] > 0}
+        if len(active_assets) >= 1:
+            lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+            for asset, st in active_assets.items():
+                wr_a   = st["win_rate"]
+                pnl_a  = st["pnl"]
+                sign_a = "+" if pnl_a >= 0 else ""
+                icon_a = "📈" if pnl_a >= 0 else "📉"
+                lines.append(
+                    f"{icon_a} {asset.upper():4s}  "
+                    f"`{st['wins']}/{st['trades']} ({wr_a:.0%})`  "
+                    f"`{sign_a}${pnl_a:.2f}`"
+                )
+
         if uptime_h > 0:
+            lines.append(f"━━━━━━━━━━━━━━━━━━━━")
             lines.append(f"Uptime:      `{uptime_h:.1f}h`")
         self._send("\n".join(lines), priority=True)
 
     def send_message(self, text: str) -> None:
         """Send a raw text message (for custom notifications)."""
         self._send(text)
+
+    def close(self) -> None:
+        """Flush queued messages and shut down the background thread pool.
+
+        Call once during bot shutdown so in-flight Telegram messages are
+        delivered before the process exits.
+        """
+        self._executor.shutdown(wait=True)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Internal
@@ -322,9 +371,17 @@ class TelegramAlerter:
                 )
                 return
 
+        if self._pending_count >= self._MAX_QUEUE:
+            logger.warning(
+                "Telegram queue full (%d pending) — dropping message: %.60s",
+                self._pending_count, text,
+            )
+            return
+
         # Update send time optimistically before queuing so rapid non-priority
         # messages don't all queue up.
         self._last_send_time = time.time()
+        self._pending_count += 1
         self._executor.submit(self._http_send, text)
 
     def _http_send(self, text: str) -> None:
@@ -345,3 +402,5 @@ class TelegramAlerter:
             logger.debug("Telegram message sent (#%d)", self._messages_sent)
         except requests.exceptions.RequestException as exc:
             logger.warning("Telegram send failed (non-critical): %s", exc)
+        finally:
+            self._pending_count = max(0, self._pending_count - 1)
