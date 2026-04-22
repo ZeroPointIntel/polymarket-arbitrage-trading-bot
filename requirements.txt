@@ -14,7 +14,8 @@ websockets>=12.0,<14.0
 
 # ── HTTP clients ──────────────────────────────────────────────────────────────
 requests>=2.31.0,<3.0.0
-httpx[http2]>=0.25.0,<1.0.0          # async HTTP + HTTP/2 support
+httpx[http2,socks]>=0.25.0,<1.0.0    # async HTTP + HTTP/2 + SOCKS proxy support
+python-socks[asyncio]>=2.4.0,<3.0.0  # SOCKS4/5 proxy for WebSocket tunneling
 
 # ── Genoshide toolkit ─────────────────────────────────────────────────────────
 solanakit @ git+https://github.com/genoshide/solanakit.git

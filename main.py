@@ -162,6 +162,7 @@ class PolymarketArbitrageBot:
             paper_mode=config.paper_mode,
             trade_window_minutes=config.trade_window_minutes,
             paper_slippage_pct=config.paper_slippage_pct if config.paper_mode else 0.0,
+            proxy_url=config.proxy_url,
         )
 
         # ── Edge detector (latency-arb) ───────────────────────────────────────
@@ -220,6 +221,7 @@ class PolymarketArbitrageBot:
         # Replaces REST polling for price lookups: ~10-50ms vs ~200-500ms
         self.pm_ws_feed = PolymarketWSFeed(
             on_price_change=self._on_pm_price_change,
+            proxy_url=config.proxy_url,
         )
         # Attach WS feed to client so get_market_price() uses cache first
         self.polymarket_client.attach_ws_feed(self.pm_ws_feed)
@@ -236,11 +238,15 @@ class PolymarketArbitrageBot:
             bot_token=config.telegram_bot_token,
             chat_id=config.telegram_chat_id,
             enabled=config.telegram_enabled,
+            proxy_url=config.proxy_url,
         )
 
         # Register OpenClaw command handlers
         self._register_openclaw_commands()
 
+        if config.proxy_url:
+            _proxy_host = config.proxy_url.split("@")[-1] if "@" in config.proxy_url else config.proxy_url
+            logger.info("Proxy enabled: %s (REST + WS + Telegram)", _proxy_host)
         logger.info(
             "Bot initialized | Mode: %s | Balance: $%.2f",
             "PAPER" if config.paper_mode else "LIVE",

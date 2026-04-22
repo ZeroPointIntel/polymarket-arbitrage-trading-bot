@@ -201,6 +201,14 @@ OPENCLAW_AGENT_ID: str = os.getenv("OPENCLAW_AGENT_ID", "")
 OPENCLAW_REPORT_INTERVAL: int = int(os.getenv("OPENCLAW_REPORT_INTERVAL", "300"))
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Proxy
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional proxy URL for all outbound connections (REST, WebSocket, Telegram).
+# Supports SOCKS5 (socks5://user:pass@host:port), SOCKS4, or HTTP proxies.
+# Leave empty to connect directly.
+PROXY_URL: str = os.getenv("PROXY_URL", "")
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Telegram Notifications
 # ─────────────────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -291,6 +299,9 @@ class BotConfig:
     openclaw_api_url: str = OPENCLAW_API_URL
     openclaw_agent_id: str = OPENCLAW_AGENT_ID
     openclaw_report_interval: int = OPENCLAW_REPORT_INTERVAL
+
+    # Proxy (optional — applies to REST, WebSocket, and Telegram)
+    proxy_url: str = PROXY_URL
 
     # Telegram
     telegram_bot_token: str = TELEGRAM_BOT_TOKEN

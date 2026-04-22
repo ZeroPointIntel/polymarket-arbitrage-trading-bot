@@ -109,6 +109,7 @@ class PolymarketClient:
         paper_mode: bool = True,
         trade_window_minutes: int = 5,
         paper_slippage_pct: float = 0.0,
+        proxy_url: str = "",
     ) -> None:
         self.host = host
         self.chain_id = chain_id
@@ -118,6 +119,7 @@ class PolymarketClient:
         self.paper_mode = paper_mode
         self.trade_window_minutes: int = trade_window_minutes
         self.paper_slippage_pct: float = paper_slippage_pct
+        self._proxy_url: str = proxy_url
 
         self._client = None
         # Per-asset market cache: asset → {conditionId: MarketInfo}
@@ -127,7 +129,8 @@ class PolymarketClient:
         self._order_count: int = 0
         # Consecutive empty discovery counter per asset — for operator alerting
         self._consecutive_empty_by_asset: Dict[str, int] = {}
-        self._http = httpx.AsyncClient(timeout=8.0, follow_redirects=True)
+        _proxy_kwargs = {"proxy": proxy_url} if proxy_url else {}
+        self._http = httpx.AsyncClient(timeout=8.0, follow_redirects=True, **_proxy_kwargs)
 
         if not paper_mode:
             self._initialize_live_client()
