@@ -37,11 +37,14 @@ class TelegramAlerter:
         chat_id: str,
         enabled: bool = True,
         min_interval_seconds: float = 1.0,
+        proxy_url: str = "",
     ) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.enabled = enabled and bool(bot_token) and bool(chat_id)
         self.min_interval_seconds = min_interval_seconds
+        # requests proxies dict — None when no proxy configured
+        self._proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
 
         self._last_send_time: float = 0.0
         self._messages_sent: int = 0
@@ -396,6 +399,7 @@ class TelegramAlerter:
                     "disable_web_page_preview": True,
                 },
                 timeout=10,
+                proxies=self._proxies,
             )
             response.raise_for_status()
             self._messages_sent += 1

@@ -59,13 +59,20 @@ class PolymarketWSFeed:
     RECONNECT_MAX_DELAY = 30.0   # seconds
     STALE_PRICE_TTL = 60.0       # seconds before price is considered stale
 
-    def __init__(self, on_price_change: Optional[Callable] = None) -> None:
+    def __init__(
+        self,
+        on_price_change: Optional[Callable] = None,
+        proxy_url: str = "",
+    ) -> None:
         """
         Args:
             on_price_change: Optional callback(token_id, price, side, timestamp)
                              called on every price_change event.
+            proxy_url: Optional SOCKS5/SOCKS4/HTTP proxy URL, e.g.
+                       "socks5://user:pass@host:1080". Leave empty for direct.
         """
         self._on_price_change = on_price_change
+        self._proxy_url: str = proxy_url
 
         # Price cache: token_id → {"price": float, "side": str, "ts": float}
         self._prices: Dict[str, Dict] = {}
@@ -254,6 +261,20 @@ class PolymarketWSFeed:
             self._connect_attempts, self.WS_URL,
         )
 
+        _ws_extra: dict = {}
+        if self._proxy_url:
+            from python_socks.async_.asyncio import Proxy as _SocksProxy  # type: ignore
+            import ssl as _ssl
+            _proxy = _SocksProxy.from_url(self._proxy_url)
+            _sock = await _proxy.connect(
+                dest_host="ws-subscriptions-clob.polymarket.com",
+                dest_port=443,
+            )
+            _ssl_ctx = _ssl.create_default_context()
+            _ws_extra["sock"] = _sock
+            _ws_extra["ssl"] = _ssl_ctx
+            _ws_extra["server_hostname"] = "ws-subscriptions-clob.polymarket.com"
+
         async with websockets.connect(
             self.WS_URL,
             open_timeout=15,
@@ -264,6 +285,7 @@ class PolymarketWSFeed:
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
                 "Origin": "https://polymarket.com",
             },
+            **_ws_extra,
         ) as ws:
             self._ws = ws
             self._reconnect_delay = self.RECONNECT_BASE_DELAY  # Reset on success
