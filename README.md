@@ -1,11 +1,14 @@
 # POLYMARKET ARBITRAGE BOT — OPENCLAW EDITION
 
-> Two independent arbitrage strategies for Polymarket binary prediction markets on Polygon.
+> **Polymarket resolves every 5 minutes. The oracle lags 2.7 seconds behind Binance. This bot lives in that gap.**
+
+Two independent arbitrage strategies — latency arb and structural dump-hedge — running simultaneously on Polygon, protected by adaptive Kelly sizing, per-strategy circuit breakers, and a real-time terminal dashboard.
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue)](https://python.org)
 [![Polygon](https://img.shields.io/badge/Network-Polygon_Mainnet-purple)](https://polygon.technology)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](https://docs.docker.com)
+[![Release](https://img.shields.io/github/v/release/genoshide/polymarket-arbitrage-trading-bot)](https://github.com/genoshide/polymarket-arbitrage-trading-bot/releases)
 
 ---
 
