@@ -143,8 +143,8 @@ class KellySizer:
         elif win_rate < 0.55:
             fraction = self.kelly_fraction
         else:
-            # Outperforming: allow up to 1.25× base, capped at base (conservative)
-            fraction = min(self.kelly_fraction * 1.25, self.kelly_fraction)
+            # Outperforming: allow up to 1.25× base, hard-capped at 1.0 (full Kelly)
+            fraction = min(self.kelly_fraction * 1.25, 1.0)
 
         if fraction != self.kelly_fraction:
             logger.debug(

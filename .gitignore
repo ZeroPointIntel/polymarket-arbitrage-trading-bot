@@ -30,3 +30,7 @@ polymarket_bot.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Local planning docs
+ROADMAP.md
+trades/

@@ -7,7 +7,6 @@
 ║    • Daily loss limit: -20% → automatic trading halt                        ║
 ║    • Total drawdown kill switch: -40% → permanent halt until manual reset   ║
 ║    • Maximum concurrent open positions: 3                                    ║
-║    • Minimum market liquidity: $50,000 USDC                                 ║
 ║                                                                              ║
 ║  The kill switch is the most important safety feature. If the bot is        ║
 ║  running while you sleep and something breaks, you want it to stop,         ║
@@ -55,10 +54,6 @@ class Position:
     paper_mode: bool = True
 
     @property
-    def is_open(self) -> bool:
-        return self.closed_at is None
-
-    @property
     def duration_seconds(self) -> float:
         end = self.closed_at or time.time()
         return end - self.opened_at
@@ -87,10 +82,6 @@ class DumpHedgePosition:
     no_exit_price: Optional[float] = None
     pnl_usdc: Optional[float] = None
     exit_reason: str = ""
-
-    @property
-    def is_open(self) -> bool:
-        return self.closed_at is None
 
     @property
     def duration_seconds(self) -> float:
@@ -124,6 +115,7 @@ class RiskState:
     circuit_breaker_resume_at: float
     la_pnl: float
     dh_pnl: float
+    asset_stats: dict  # asset → {trades, wins, pnl, win_rate}
 
 
 class RiskManager:
@@ -195,8 +187,14 @@ class RiskManager:
         self._la_pnl: float = 0.0
         self._dh_pnl: float = 0.0
 
-        # Circuit breaker: rolling window of recent PnL values + timed-pause state
-        self._recent_pnls: Deque[float] = deque(maxlen=circuit_breaker_window)
+        self._asset_trades: Dict[str, int] = {}
+        self._asset_wins: Dict[str, int] = {}
+        self._asset_pnl: Dict[str, float] = {}
+
+        # Circuit breaker: per-strategy rolling windows + timed-pause state.
+        # Separate deques prevent DH wins from masking LA losses (and vice versa).
+        self._recent_la_pnls: Deque[float] = deque(maxlen=circuit_breaker_window)
+        self._recent_dh_pnls: Deque[float] = deque(maxlen=circuit_breaker_window)
         self._circuit_breaker_resume_at: float = 0.0
 
         logger.info(
@@ -268,7 +266,6 @@ class RiskManager:
         """Record a newly opened position and deduct cost from balance."""
         self._open_positions[position.order_id] = position
         self._current_balance -= position.cost_usdc
-        self._total_trades += 1
 
         logger.info(
             "Position OPENED | %s | $%.2f USDC | Balance: $%.2f",
@@ -314,14 +311,22 @@ class RiskManager:
         self._total_pnl += pnl
         self._la_pnl += pnl
 
-        if pnl > 0:
+        self._total_trades += 1
+        won = pnl > 0
+
+        if won:
             self._winning_trades += 1
+
+        self._record_asset_close(position.asset, pnl, won)
 
         # Update peak balance
         if self._current_balance > self._peak_balance:
             self._peak_balance = self._current_balance
 
         self._closed_positions.append(position)
+        # Cap memory: keep only the most recent 1000 closed LA positions
+        if len(self._closed_positions) > 1000:
+            self._closed_positions = self._closed_positions[-1000:]
 
         logger.info(
             "Position CLOSED | %s | PnL: $%+.2f | Balance: $%.2f | "
@@ -334,7 +339,7 @@ class RiskManager:
 
         # Check risk thresholds after every close
         self._check_risk_thresholds()
-        self._recent_pnls.append(pnl)
+        self._recent_la_pnls.append(pnl)
         self._check_circuit_breaker()
 
         return position
@@ -381,7 +386,6 @@ class RiskManager:
         """Record a newly opened dump-hedge position and deduct cost from balance."""
         self._open_dh_positions[position.dh_id] = position
         self._current_balance -= position.combined_cost_usdc
-        self._total_dh_trades += 1
 
         logger.info(
             "DH Position OPENED | %s | $%.2f USDC | Locked: $%.2f | Balance: $%.2f",
@@ -427,13 +431,21 @@ class RiskManager:
         self._total_pnl += pnl
         self._dh_pnl += pnl
 
-        if pnl > 0:
+        self._total_dh_trades += 1
+        won = pnl > 0
+
+        if won:
             self._winning_trades += 1
+
+        self._record_asset_close(position.asset, pnl, won)
 
         if self._current_balance > self._peak_balance:
             self._peak_balance = self._current_balance
 
         self._closed_dh_positions.append(position)
+        # Cap memory: keep only the most recent 1000 closed DH positions
+        if len(self._closed_dh_positions) > 1000:
+            self._closed_dh_positions = self._closed_dh_positions[-1000:]
 
         logger.info(
             "DH Position CLOSED | %s | PnL: $%+.2f | Reason: %s | Balance: $%.2f",
@@ -444,7 +456,7 @@ class RiskManager:
         )
 
         self._check_risk_thresholds()
-        self._recent_pnls.append(pnl)
+        self._recent_dh_pnls.append(pnl)
         self._check_circuit_breaker()
         return position
 
@@ -570,7 +582,32 @@ class RiskManager:
             circuit_breaker_resume_at=self._circuit_breaker_resume_at,
             la_pnl=self._la_pnl,
             dh_pnl=self._dh_pnl,
+            asset_stats=self._build_asset_stats(),
         )
+
+    def _build_asset_stats(self) -> dict:
+        """Return per-asset {trades, wins, pnl, win_rate} dict (sorted by PnL desc)."""
+        result = {}
+        for asset in self._asset_trades:
+            t = self._asset_trades[asset]
+            w = self._asset_wins.get(asset, 0)
+            p = self._asset_pnl.get(asset, 0.0)
+            result[asset] = {
+                "trades": t,
+                "wins": w,
+                "pnl": p,
+                "win_rate": w / t if t > 0 else 0.0,
+            }
+        return dict(sorted(result.items(), key=lambda kv: kv[1]["pnl"], reverse=True))
+
+    def _record_asset_close(self, asset: str, pnl: float, won: bool) -> None:
+        """Update per-asset counters on every trade close."""
+        if not asset:
+            return
+        self._asset_trades[asset] = self._asset_trades.get(asset, 0) + 1
+        if won:
+            self._asset_wins[asset] = self._asset_wins.get(asset, 0) + 1
+        self._asset_pnl[asset] = self._asset_pnl.get(asset, 0.0) + pnl
 
     # ─────────────────────────────────────────────────────────────────────────
     # Internal Methods
@@ -607,47 +644,58 @@ class RiskManager:
 
     def _check_circuit_breaker(self) -> None:
         """
-        Trigger a timed trading pause if recent losses exceed the circuit breaker threshold.
+        Trigger a timed trading pause if recent losses in EITHER strategy exceed
+        the circuit breaker threshold.
 
-        Fires when ALL of the following are true:
+        Checks LA and DH independently so a streak of DH wins cannot hide a
+        consecutive LA loss run (and vice versa).
+
+        Fires when ALL of the following are true for a given strategy window:
           - circuit_breaker_enabled is True
           - At least circuit_breaker_min_losses of the last N trades are losses
-          - The cumulative loss of those trades > circuit_breaker_loss_pct * current_balance
+          - The cumulative loss > circuit_breaker_loss_pct * current_balance
           - Bot is currently ACTIVE (don't stack pauses)
         """
         if not self.circuit_breaker_enabled:
             return
         if self._status != TradingStatus.ACTIVE:
             return
-        if len(self._recent_pnls) < self.circuit_breaker_min_losses:
-            return
 
-        losses = [p for p in self._recent_pnls if p < 0]
-        if len(losses) < self.circuit_breaker_min_losses:
-            return
-
-        cumulative_loss = abs(sum(losses))
         threshold = self._current_balance * self.circuit_breaker_loss_pct
-        if cumulative_loss < threshold:
-            return
 
-        resume_at = time.time() + self.circuit_breaker_pause_seconds
-        self._circuit_breaker_resume_at = resume_at
-        self._status = TradingStatus.PAUSED
-        self._kill_reason = (
-            f"Circuit breaker: {len(losses)} losses in last {len(self._recent_pnls)} trades, "
-            f"cumulative loss ${cumulative_loss:.2f} > {self.circuit_breaker_loss_pct:.0%} "
-            f"of balance. Pausing {self.circuit_breaker_pause_seconds:.0f}s."
-        )
-        logger.warning(
-            "CIRCUIT BREAKER triggered — trading paused for %.0fs. "
-            "%d/%d recent trades are losses, cumulative $%.2f. Resumes at %s UTC.",
-            self.circuit_breaker_pause_seconds,
-            len(losses),
-            len(self._recent_pnls),
-            cumulative_loss,
-            datetime.datetime.utcfromtimestamp(resume_at).strftime("%H:%M:%S"),
-        )
+        for strategy, pnls in (("LA", self._recent_la_pnls), ("DH", self._recent_dh_pnls)):
+            if len(pnls) < self.circuit_breaker_min_losses:
+                continue
+
+            losses = [p for p in pnls if p < 0]
+            if len(losses) < self.circuit_breaker_min_losses:
+                continue
+
+            cumulative_loss = abs(sum(losses))
+            if cumulative_loss < threshold:
+                continue
+
+            resume_at = time.time() + self.circuit_breaker_pause_seconds
+            self._circuit_breaker_resume_at = resume_at
+            self._status = TradingStatus.PAUSED
+            self._kill_reason = (
+                f"Circuit breaker ({strategy}): {len(losses)} losses in last "
+                f"{len(pnls)} {strategy} trades, cumulative loss "
+                f"${cumulative_loss:.2f} > {self.circuit_breaker_loss_pct:.0%} "
+                f"of balance. Pausing {self.circuit_breaker_pause_seconds:.0f}s."
+            )
+            logger.warning(
+                "CIRCUIT BREAKER triggered [%s] — trading paused for %.0fs. "
+                "%d/%d recent %s trades are losses, cumulative $%.2f. Resumes at %s UTC.",
+                strategy,
+                self.circuit_breaker_pause_seconds,
+                len(losses),
+                len(pnls),
+                strategy,
+                cumulative_loss,
+                datetime.datetime.utcfromtimestamp(resume_at).strftime("%H:%M:%S"),
+            )
+            break  # One trigger per call is enough
 
     def _check_circuit_breaker_resume(self) -> None:
         """Auto-resume after circuit breaker pause expires."""
@@ -659,7 +707,8 @@ class RiskManager:
             self._circuit_breaker_resume_at = 0.0
             self._status = TradingStatus.ACTIVE
             self._kill_reason = None
-            self._recent_pnls.clear()  # Reset window after pause
+            self._recent_la_pnls.clear()
+            self._recent_dh_pnls.clear()
             logger.info("Circuit breaker pause expired — trading RESUMED.")
 
     def _trigger_kill_switch(self, reason: str) -> None:

@@ -353,6 +353,7 @@ class EdgeDetector:
                 asset.upper(), self.min_market_liquidity,
             )
             self._active_market_by_asset[asset] = None
+            self._active_market_fetched_at[asset] = now
             return None
 
         # Filter to the target up/down window markets
@@ -364,6 +365,7 @@ class EdgeDetector:
                 [m.question[:50] for m in markets],
             )
             self._active_market_by_asset[asset] = None
+            self._active_market_fetched_at[asset] = now
             return None
 
         tradeable = [
@@ -372,6 +374,7 @@ class EdgeDetector:
         ]
         if not tradeable:
             self._active_market_by_asset[asset] = None
+            self._active_market_fetched_at[asset] = now
             return None
 
         tradeable.sort(key=lambda m: (

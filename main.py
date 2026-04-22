@@ -23,6 +23,7 @@ except Exception:
 import argparse
 import asyncio
 import csv
+import datetime
 import os
 import signal
 import sys
@@ -106,6 +107,10 @@ class PolymarketArbitrageBot:
         # Track order_ids for which on-chain auto-redeem has been triggered.
         # Prevents calling redeem_positions more than once per position.
         self._auto_redeem_triggered: set = set()
+
+        # Track position/dh_ids that have already received a near-timeout alert.
+        # Cleared when the position closes so the set doesn't grow unbounded.
+        self._timeout_alerted: set = set()
 
         # Tracks whether a "no markets found" Telegram alert was already sent per asset.
         # Resets when the market is found again so a follow-up alert fires if it recurs.
@@ -345,7 +350,17 @@ class PolymarketArbitrageBot:
             # Await all cancelled tasks so their cleanup completes before
             # closing the HTTP client (prevents dangling requests mid-flight).
             await asyncio.gather(*feed_tasks, pm_ws_task, return_exceptions=True)
+            # Export any trades that closed today but weren't yet written to CSV
+            # (handles mid-day shutdowns; midnight trigger covers normal operation)
+            _shutdown_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+            try:
+                self._export_trades_csv(_shutdown_date)
+            except Exception as _exc:
+                logger.warning("CSV export on shutdown failed: %s", _exc)
+
+            self.telegram.send_message("🛑 Bot stopped.")
             await self.polymarket_client.close()
+            self.telegram.close()
             logger.info("Bot shutdown complete.")
 
     async def _main_loop(self) -> None:
@@ -455,8 +470,7 @@ class PolymarketArbitrageBot:
                         self._market_empty_alerted[_asset] = False
 
                 # 3d. Daily summary at midnight UTC (once per calendar day)
-                import datetime as _datetime_mod
-                _today_utc = _datetime_mod.datetime.utcnow().strftime("%Y-%m-%d")
+                _today_utc = datetime.datetime.utcnow().strftime("%Y-%m-%d")
                 if _today_utc != self._last_daily_summary_date and self._last_daily_summary_date:
                     self.telegram.send_daily_summary(
                         risk_state=self.risk_manager.get_state(),
@@ -716,7 +730,11 @@ class PolymarketArbitrageBot:
 
     async def _check_open_positions(self) -> None:
         open_orders = self.polymarket_client.get_open_orders()
-        open_order_ids = {o.get("id") for o in open_orders}
+        # CLOB API returns "orderID"; tolerate "id" and "orderId" variants too.
+        open_order_ids = {
+            o.get("orderID") or o.get("orderId") or o.get("id")
+            for o in open_orders
+        } - {None}
 
         for order_id, position in list(self.risk_manager._open_positions.items()):
 
@@ -759,6 +777,23 @@ class PolymarketArbitrageBot:
             elif time.time() - position.opened_at > cfg.position_timeout_seconds:
                 should_exit = True
                 exit_reason = f"Position timeout ({cfg.position_timeout_seconds:.0f}s)"
+
+            # Warn once when position reaches 80% of timeout without triggering exit
+            if not should_exit:
+                age = time.time() - position.opened_at
+                if (
+                    age >= cfg.position_timeout_seconds * 0.80
+                    and order_id not in self._timeout_alerted
+                ):
+                    self._timeout_alerted.add(order_id)
+                    remaining = cfg.position_timeout_seconds - age
+                    self.telegram.send_risk_alert(
+                        "PositionNearTimeout",
+                        f"Position {order_id[:12]} open {age:.0f}s — "
+                        f"force-close in ~{remaining:.0f}s. "
+                        f"Market: {position.market_question[:50]}",
+                        severity="WARNING",
+                    )
 
             if should_exit:
                 # ── Sell-retry gate ──────────────────────────────────────────
@@ -837,9 +872,10 @@ class PolymarketArbitrageBot:
                     )
                     continue
 
-                # Sell succeeded — clear retry counter and release asset lock.
+                # Sell succeeded — clear retry counter, timeout alert state, and asset lock.
                 # Use position.asset directly (reliable) instead of scanning by order_id.
                 self._sell_fail_count.pop(order_id, None)
+                self._timeout_alerted.discard(order_id)
                 if position.asset:
                     self._asset_open_position.pop(position.asset, None)
                     logger.info("Asset lock released: %s", position.asset.upper())
@@ -881,8 +917,7 @@ class PolymarketArbitrageBot:
 
                 risk_state = self.risk_manager.get_state()
                 if risk_state.circuit_breaker_active:
-                    import datetime as _dt
-                    resume_str = _dt.datetime.utcfromtimestamp(
+                    resume_str = datetime.datetime.utcfromtimestamp(
                         risk_state.circuit_breaker_resume_at
                     ).strftime("%H:%M:%S UTC")
                     self.telegram.send_risk_alert(
@@ -901,12 +936,15 @@ class PolymarketArbitrageBot:
         asset = signal.asset
 
         # Block if this asset already has an open DH position.
+        # Use "PENDING" as an early sentinel so the 20Hz loop cannot re-enter
+        # between the first order submission and the final lock assignment.
         if self._asset_open_dh_position.get(asset):
             logger.debug(
                 "Asset %s already has open DH position %s — signal ignored",
                 asset.upper(), self._asset_open_dh_position[asset],
             )
             return
+        self._asset_open_dh_position[asset] = "PENDING"
 
         cfg = self.config
         POLYMARKET_MIN_LEG_USDC = 1.00
@@ -947,12 +985,14 @@ class PolymarketArbitrageBot:
                 cfg.dh_fixed_bet_usdc,
                 (POLYMARKET_MIN_LEG_USDC / exec_yes + POLYMARKET_MIN_LEG_USDC / exec_no) * exec_combined,
             )
+            self._asset_open_dh_position.pop(asset, None)
             return
 
         # Risk check
         allowed, reason = self.risk_manager.can_open_dh_position(combined_cost)
         if not allowed:
             logger.warning("DH position blocked by risk manager: %s", reason)
+            self._asset_open_dh_position.pop(asset, None)
             return
 
         dh_id = f"dh_{asset}_{uuid.uuid4().hex[:8]}"
@@ -973,6 +1013,7 @@ class PolymarketArbitrageBot:
         )
         if not yes_result.success:
             logger.error("DH YES leg failed: %s", yes_result.error)
+            self._asset_open_dh_position.pop(asset, None)
             self.dh_detector.reset_cooldown(asset)
             return
 
@@ -1027,10 +1068,11 @@ class PolymarketArbitrageBot:
                     f"Close manually!",
                     severity="CRITICAL",
                 )
+            self._asset_open_dh_position.pop(asset, None)
             self.dh_detector.reset_cooldown(asset)
             return
 
-        # Acquire per-asset DH lock
+        # Promote PENDING sentinel to the real dh_id
         self._asset_open_dh_position[asset] = dh_id
 
         # Use actual fill prices from order results for accurate PnL tracking.
@@ -1146,10 +1188,35 @@ class PolymarketArbitrageBot:
                     f"{cfg.dh_early_exit_profit_fraction:.0%} of locked ${position.locked_profit_usdc:.2f}"
                 )
 
+            # Stop loss: combined price moved against us beyond STOP_LOSS_PNL threshold
+            elif cfg.stop_loss_pnl < 0 and position.combined_cost_usdc > 0:
+                pnl_pct = profit_so_far / position.combined_cost_usdc
+                if pnl_pct <= cfg.stop_loss_pnl:
+                    should_exit = True
+                    exit_reason = (
+                        f"DH stop loss: pnl={pnl_pct:+.1%} limit={cfg.stop_loss_pnl:+.1%}"
+                    )
+
             # Timeout
             elif age >= cfg.dh_timeout_seconds:
                 should_exit = True
                 exit_reason = f"DH timeout ({cfg.dh_timeout_seconds:.0f}s)"
+
+            # Warn once when DH position reaches 80% of timeout without triggering exit
+            if not should_exit:
+                if (
+                    age >= cfg.dh_timeout_seconds * 0.80
+                    and dh_id not in self._timeout_alerted
+                ):
+                    self._timeout_alerted.add(dh_id)
+                    remaining = cfg.dh_timeout_seconds - age
+                    self.telegram.send_risk_alert(
+                        "DHNearTimeout",
+                        f"DH {dh_id[:12]} ({position.asset.upper()}) open {age:.0f}s — "
+                        f"force-close in ~{remaining:.0f}s. "
+                        f"Profit so far: ${profit_so_far:.2f}",
+                        severity="WARNING",
+                    )
 
             if not should_exit:
                 continue
@@ -1225,8 +1292,9 @@ class PolymarketArbitrageBot:
             if closed is None:
                 continue
 
-            # Release asset lock
+            # Release asset lock and timeout alert state
             self._asset_open_dh_position.pop(position.asset, None)
+            self._timeout_alerted.discard(dh_id)
             if self.dh_detector:
                 self.dh_detector.reset_cooldown(position.asset)
 
@@ -1255,8 +1323,7 @@ class PolymarketArbitrageBot:
 
             dh_risk_state = self.risk_manager.get_state()
             if dh_risk_state.circuit_breaker_active:
-                import datetime as _dt
-                resume_str = _dt.datetime.utcfromtimestamp(
+                resume_str = datetime.datetime.utcfromtimestamp(
                     dh_risk_state.circuit_breaker_resume_at
                 ).strftime("%H:%M:%S UTC")
                 self.telegram.send_risk_alert(
@@ -1440,15 +1507,13 @@ class PolymarketArbitrageBot:
         def _utc(ts: Optional[float]) -> str:
             if ts is None:
                 return ""
-            import datetime as _dt
-            return _dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # LA positions
         for pos in self.risk_manager._closed_positions:
             if pos.closed_at is None:
                 continue
-            import datetime as _dt
-            closed_date = _dt.datetime.utcfromtimestamp(pos.closed_at).strftime("%Y-%m-%d")
+            closed_date = datetime.datetime.utcfromtimestamp(pos.closed_at).strftime("%Y-%m-%d")
             if closed_date != date_str:
                 continue
             if pos.order_id in existing_ids:
@@ -1476,8 +1541,7 @@ class PolymarketArbitrageBot:
         for pos in self.risk_manager._closed_dh_positions:
             if pos.closed_at is None:
                 continue
-            import datetime as _dt
-            closed_date = _dt.datetime.utcfromtimestamp(pos.closed_at).strftime("%Y-%m-%d")
+            closed_date = datetime.datetime.utcfromtimestamp(pos.closed_at).strftime("%Y-%m-%d")
             if closed_date != date_str:
                 continue
             if pos.dh_id in existing_ids:
