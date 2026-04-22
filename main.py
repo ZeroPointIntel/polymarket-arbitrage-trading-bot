@@ -91,6 +91,7 @@ class PolymarketArbitrageBot:
         self._last_command_poll = 0.0
         self._last_heartbeat = 0.0
         self._last_kill_log = 0.0
+        self._last_idle_log = 0.0
         self._loop_count = 0
 
         # Per-asset position lock: asset → order_id of the current open position.
@@ -469,7 +470,26 @@ class PolymarketArbitrageBot:
                         # Market found again — reset alert so it fires again if it recurs
                         self._market_empty_alerted[_asset] = False
 
-                # 3d. Daily summary at midnight UTC (once per calendar day)
+                # 3d. Periodic idle heartbeat — proves the bot is alive during quiet markets
+                _IDLE_LOG_INTERVAL = 60.0
+                if now - self._last_idle_log >= _IDLE_LOG_INTERVAL:
+                    self._last_idle_log = now
+                    rs = self.risk_manager.get_state()
+                    market_status = " | ".join(
+                        f"{a.upper()}: {'OK' if self.polymarket_client._consecutive_empty_by_asset.get(a, 0) == 0 else 'no market'}"
+                        for a in self.config.trading_markets
+                    )
+                    open_pos = rs.open_positions + rs.open_dh_positions
+                    logger.info(
+                        "[heartbeat] alive | %s | open=%d | balance=$%.2f | trades=%d | uptime=%.0fm",
+                        market_status,
+                        open_pos,
+                        rs.current_balance,
+                        rs.total_trades + rs.total_dh_trades,
+                        (now - self._start_time) / 60,
+                    )
+
+                # 3e. Daily summary at midnight UTC (once per calendar day)
                 _today_utc = datetime.datetime.utcnow().strftime("%Y-%m-%d")
                 if _today_utc != self._last_daily_summary_date and self._last_daily_summary_date:
                     self.telegram.send_daily_summary(
