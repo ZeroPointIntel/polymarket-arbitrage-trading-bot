@@ -286,10 +286,10 @@ class PolymarketWSFeed:
             ping_interval=None,   # We handle pings manually
             ping_timeout=None,
             max_size=2**20,       # 1MB max message size
-            additional_headers={
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-                "Origin": "https://polymarket.com",
-            },
+            extra_headers=[
+                ("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"),
+                ("Origin", "https://polymarket.com"),
+            ],
             **_ws_extra,
         ) as ws:
             self._ws = ws
