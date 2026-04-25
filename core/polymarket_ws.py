@@ -53,7 +53,7 @@ class PolymarketWSFeed:
     Automatically reconnects on disconnect with exponential backoff.
     """
 
-    WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/"
+    WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     PING_INTERVAL = 5.0          # seconds — required by Polymarket docs
     RECONNECT_BASE_DELAY = 2.0   # seconds
     RECONNECT_MAX_DELAY = 30.0   # seconds
