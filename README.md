@@ -36,6 +36,7 @@ Two independent arbitrage strategies â€” latency arb and structural dump-hedge â
 - [Risk Protection Layers](#risk-protection-layers)
 - [Dashboard](#dashboard)
 - [Project Structure](#project-structure)
+- [Contributing](#contributing)
 - [Disclaimer](#disclaimer)
 
 ---
@@ -529,6 +530,12 @@ polymarket-arbitrage-trading-bot/
 ```
 
 For a detailed technical breakdown of each component, data flows, and design decisions, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+---
+
+## Contributing
+
+Pull requests are welcome. Check [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code style, testing requirements, and a list of open areas that need help.
 
 ---
 
