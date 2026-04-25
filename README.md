@@ -9,6 +9,7 @@ Two independent arbitrage strategies â€” latency arb and structural dump-hedge â
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](https://docs.docker.com)
 [![Release](https://img.shields.io/github/v/release/genoshide/polymarket-arbitrage-trading-bot)](https://github.com/genoshide/polymarket-arbitrage-trading-bot/releases)
+[![Downloads](https://img.shields.io/github/downloads/genoshide/polymarket-arbitrage-trading-bot/total)](https://github.com/genoshide/polymarket-arbitrage-trading-bot/releases)
 
 ---
 
