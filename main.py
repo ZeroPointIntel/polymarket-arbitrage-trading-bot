@@ -1617,7 +1617,7 @@ class PolymarketArbitrageBot:
         Subscribe the Polymarket WS feed to a new active market.
         subscribe() is synchronous — call it directly, no create_task.
         """
-        self.pm_ws_feed.subscribe(market.condition_id)
+        self.pm_ws_feed.subscribe(market.condition_id, market.yes_token_id, market.no_token_id)
         logger.info(
             "PM WS subscribed to market: %s (conditionId: %s)",
             market.question[:50],

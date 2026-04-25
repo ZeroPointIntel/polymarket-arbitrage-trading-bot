@@ -53,7 +53,7 @@ class PolymarketWSFeed:
     Automatically reconnects on disconnect with exponential backoff.
     """
 
-    WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/"
+    WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     PING_INTERVAL = 5.0          # seconds — required by Polymarket docs
     RECONNECT_BASE_DELAY = 2.0   # seconds
     RECONNECT_MAX_DELAY = 30.0   # seconds
@@ -79,6 +79,9 @@ class PolymarketWSFeed:
 
         # Subscribed condition IDs
         self._subscribed: Set[str] = set()
+        
+        # Mapping: condition_id → [yes_token_id, no_token_id]
+        self._condition_to_tokens: Dict[str, list] = {}
 
         # Internal state
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
@@ -119,7 +122,7 @@ class PolymarketWSFeed:
             self._cache_evict_task.cancel()
         logger.info("PolymarketWSFeed stopped.")
 
-    def subscribe(self, condition_id: str) -> None:
+    def subscribe(self, condition_id: str, yes_token_id: str, no_token_id: str) -> None:
         """
         Add a condition ID to the subscription set.
 
@@ -129,15 +132,17 @@ class PolymarketWSFeed:
         if condition_id in self._subscribed:
             return
         self._subscribed.add(condition_id)
+        self._condition_to_tokens[condition_id] = [yes_token_id, no_token_id]
         logger.info("PM WS: Queued subscription for condition %s", condition_id[:16])
 
         # If already connected, subscribe immediately
         if self._ws and not self._ws.closed:
-            asyncio.create_task(self._send_subscribe([condition_id]))
+            asyncio.create_task(self._send_subscribe([yes_token_id, no_token_id]))
 
     def unsubscribe(self, condition_id: str) -> None:
         """Remove a condition ID from the subscription set."""
         self._subscribed.discard(condition_id)
+        self._condition_to_tokens.pop(condition_id, None)
 
     def get_price(self, token_id: str, side: str = "BUY") -> Optional[float]:
         """
@@ -291,9 +296,13 @@ class PolymarketWSFeed:
             self._reconnect_delay = self.RECONNECT_BASE_DELAY  # Reset on success
             logger.info("PM WS: Connected ✓ — %s", self.WS_URL)
 
-            # Subscribe to all queued condition IDs
+            # Subscribe to all queued token IDs
             if self._subscribed:
-                await self._send_subscribe(list(self._subscribed))
+                all_tokens = []
+                for cid in self._subscribed:
+                    all_tokens.extend(self._condition_to_tokens.get(cid, []))
+                if all_tokens:
+                    await self._send_subscribe(all_tokens)
 
             # Start ping loop
             self._ping_task = asyncio.create_task(
@@ -494,26 +503,25 @@ class PolymarketWSFeed:
                 except Exception:
                     pass
 
-    async def _send_subscribe(self, condition_ids: list) -> None:
-        """Send a subscribe message for the given condition IDs."""
+    async def _send_subscribe(self, token_ids: list) -> None:
+        """Send a subscribe message for the given token IDs."""
         if not self._ws or self._ws.closed:
             logger.debug(
                 "PM WS: _send_subscribe skipped (WS not connected) — "
                 "will replay on next reconnect: %s",
-                ", ".join(c[:12] for c in condition_ids[:3]),
+                ", ".join(c[:12] for c in token_ids[:3]),
             )
             return
         msg = {
-            "type": "subscribe",
-            "channel": "market",
-            "markets": condition_ids,
+            "type": "market",
+            "assets_ids": token_ids,
         }
         try:
             await self._ws.send(json.dumps(msg))
             logger.info(
-                "PM WS: Subscribed to %d market(s): %s...",
-                len(condition_ids),
-                ", ".join(c[:12] for c in condition_ids[:3]),
+                "PM WS: Subscribed to %d token(s): %s...",
+                len(token_ids),
+                ", ".join(c[:12] for c in token_ids[:3]),
             )
         except Exception as exc:
             logger.warning("PM WS: Failed to send subscribe: %s", exc)
