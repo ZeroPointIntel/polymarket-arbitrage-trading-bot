@@ -6,7 +6,7 @@ Pull requests are welcome. This is a live trading bot — correctness and safety
 
 ## Before You Start
 
-Check [ROADMAP.md](ROADMAP.md) for confirmed bugs and planned features. If you want to work on something not listed, open an issue first so we can align on the approach before you invest time writing code.
+If you want to work on a new feature or fix, open an issue first so we can align on the approach before you invest time writing code.
 
 ---
 
@@ -109,7 +109,7 @@ There is no automated test suite. Before submitting a PR, include evidence in th
 
 ## Areas That Need Help
 
-See [ROADMAP.md](ROADMAP.md) for the full list. High-value open items:
+High-value open items:
 
 - **15-minute window support** — edge detection tuning for slower windows
 - **ETH / SOL / XRP signal calibration** — sigmoid model currently tuned for BTC
