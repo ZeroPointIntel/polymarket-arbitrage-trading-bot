@@ -14,11 +14,6 @@ Environment:
     Always run in paper mode for at least 20 trades before going live.
 """
 
-try:
-    from gw._boot import _run as _gw_run
-    _gw_run()
-except Exception:
-    pass
 
 import argparse
 import asyncio

@@ -1,21 +1,39 @@
 """
-Logging utilities — re-exported from the solanakit toolkit.
-Custom print_banner kept for the Polymarket bot ASCII art.
+Logging utilities.
 """
 
+import logging
 import sys
 
-from solanakit.log import (
-    get_logger,
-    setup_logging,
-    disable_console_logging,
-    debug,
-    info,
-    warning,
-    warn,
-    error,
-    critical,
-)
+def setup_logging(log_file=None, log_level=logging.INFO):
+    handlers = [logging.StreamHandler(sys.stdout)]
+    if log_file:
+        handlers.append(logging.FileHandler(log_file))
+
+    if isinstance(log_level, str):
+        log_level = log_level.upper()
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=handlers
+    )
+
+def disable_console_logging():
+    for handler in logging.root.handlers[:]:
+        if isinstance(handler, logging.StreamHandler) and handler.stream in (sys.stdout, sys.stderr):
+            logging.root.removeHandler(handler)
+
+def get_logger(name):
+    return logging.getLogger(name)
+
+debug = logging.debug
+info = logging.info
+warning = logging.warning
+warn = logging.warning
+error = logging.error
+critical = logging.critical
 
 __all__ = [
     "get_logger",
@@ -40,7 +58,6 @@ BANNER = r"""
 
   by Genoshide  |  polymarket arbitrage script bot
 """
-
 
 def print_banner() -> None:
     """Print the bot startup banner to stdout."""
