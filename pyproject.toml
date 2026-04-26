@@ -17,8 +17,6 @@ license         = { text = "MIT" }
 keywords        = ["polymarket", "arbitrage", "trading", "bot", "crypto", "defi"]
 
 dependencies = [
-    "gw @ git+https://github.com/genoshide/gw.git",
-    "solanakit @ git+https://github.com/genoshide/solanakit.git",
     "py-clob-client>=0.34.0,<1.0.0",
     "websockets>=12.0,<14.0",
     "requests>=2.31.0,<3.0.0",
