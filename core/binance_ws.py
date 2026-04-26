@@ -145,6 +145,14 @@ class BinanceWebSocketFeed:
         return self._latest_tick
 
     @property
+    def latest_lag_ms(self) -> Optional[float]:
+        """Return the estimated network transit lag in milliseconds."""
+        tick = self._latest_tick
+        if not tick:
+            return None
+        return max(0.0, (tick.received_at * 1000.0) - tick.timestamp_ms)
+
+    @property
     def is_connected(self) -> bool:
         return self._connected
 

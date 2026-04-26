@@ -614,7 +614,7 @@ class PolymarketArbitrageBot:
             print(f"└{LINE}┘")
         else:
             print(f"\n┌{LINE}┐")
-            print(f"│  CTRL+C — no open positions · shutting down…          │")
+            print(f"│  CTRL+C — no open positions · shutting down…            │")
             print(f"└{LINE}┘")
             return True
 

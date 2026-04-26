@@ -89,6 +89,7 @@ class PolymarketWSFeed:
         self._reconnect_delay = self.RECONNECT_BASE_DELAY
         self._connect_attempts = 0
         self._last_message_ts: float = 0.0
+        self._latest_lag_ms: Optional[float] = None
         self._total_updates: int = 0
 
         # Tasks
@@ -174,6 +175,11 @@ class PolymarketWSFeed:
             "last_message_age": round(time.time() - self._last_message_ts, 1) if self._last_message_ts else None,
             "connected": self._ws is not None and not self._ws.closed,
         }
+
+    @property
+    def latest_lag_ms(self) -> Optional[float]:
+        """Return the estimated network transit lag in milliseconds for the latest message."""
+        return self._latest_lag_ms
 
     @property
     def is_connected(self) -> bool:
@@ -405,6 +411,11 @@ class PolymarketWSFeed:
         # Update cache
         self._prices[token_id] = {"price": price, "side": side, "ts": ts}
         self._total_updates += 1
+        
+        # Update MS lag if timestamp was provided by Polymarket
+        if ts_str:
+            # Polymarket timestamps are execution times. Local time minus execution time is the lag.
+            self._latest_lag_ms = max(0.0, (time.time() - ts) * 1000.0)
 
         logger.debug(
             "PM WS price_change: token=%s | price=%.4f | side=%s",

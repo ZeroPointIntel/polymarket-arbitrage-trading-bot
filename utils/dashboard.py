@@ -241,13 +241,19 @@ def _feed_card(sym, feed, mm, color) -> Panel:
 
     ws      = Text("● OK", style="bold green") if feed.is_connected else Text("● NO", style="bold red")
     price_s = f"${price:,.2f}" if price >= 10 else f"${price:,.4f}"
+    
+    lag_ms = getattr(feed, "latest_lag_ms", None)
+    if lag_ms is not None:
+        lag_str = Text(f"{lag_ms:.0f}ms", style="dim cyan")
+    else:
+        lag_str = Text("--ms", style="dim")
 
     body = Text.assemble(
         Text(f"{price_s}\n", style="bold white"),
         Text("2.7s  ", style="dim"), chg(c27), Text("   "), arrow, Text("\n"),
         Text("60s   ", style="dim"), chg(c60), Text("\n"),
         Text("Ticks ", style="dim"), Text(f"{feed.tick_count:,}", style="white"),
-        Text("   WS ", style="dim"), ws,
+        Text("   WS ", style="dim"), ws, Text(" "), lag_str,
     )
     return Panel(body, title=Text(sym, style=f"bold {color}"),
                  border_style=color, padding=(0, 1))
