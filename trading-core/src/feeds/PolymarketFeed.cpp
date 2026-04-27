@@ -145,7 +145,7 @@ void PolymarketFeed::send_ping() {
     ping_timer_.async_wait([this](beast::error_code ec) {
         if (!ec && running_ && connected_) {
             if (ws_) {
-                ws_->async_write(net::buffer("{\"type\":\"ping\"}"), 
+                ws_->async_write(net::buffer(std::string_view("{\"type\":\"ping\"}")), 
                     [this](beast::error_code write_ec, std::size_t) {
                         if (write_ec) {
                             spdlog::warn("PolymarketFeed: Ping failed: {}", write_ec.message());

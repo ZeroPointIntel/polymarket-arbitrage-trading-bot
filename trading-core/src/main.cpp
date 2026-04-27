@@ -6,8 +6,10 @@
 #include "feeds/BinanceFeed.h"
 #include "feeds/PolymarketFeed.h"
 #include "exec/OrderRouter.h"
+#include "risk/RiskManager.h"
 #include <fstream>
 #include <map>
+#include <string>
 
 std::map<std::string, std::string> load_env() {
     std::map<std::string, std::string> env;
@@ -66,6 +68,29 @@ int main() {
         std::string chain_id = env["POLYMARKET_CHAIN_ID"].empty() ? "137" : env["POLYMARKET_CHAIN_ID"];
         std::string host = env["POLYMARKET_HOST"].empty() ? "https://clob.polymarket.com" : env["POLYMARKET_HOST"];
         std::string verifying_contract = "0x4bFB41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
+        
+        // Load RiskManager limits from .env
+        auto parse_env_double = [&](const std::string& key, double default_val) {
+            return env[key].empty() ? default_val : std::stod(env[key]);
+        };
+        auto parse_env_int = [&](const std::string& key, int default_val) {
+            return env[key].empty() ? default_val : std::stoi(env[key]);
+        };
+
+        double starting_balance = parse_env_double("PAPER_STARTING_BALANCE", 1000.0);
+        double max_position_fraction = parse_env_double("RISK_MAX_POSITION_FRACTION", 0.08);
+        double daily_loss_limit = parse_env_double("RISK_DAILY_LOSS_LIMIT", 0.20);
+        double total_drawdown_kill = parse_env_double("RISK_TOTAL_DRAWDOWN_KILL", 0.40);
+        int max_concurrent_positions = parse_env_int("RISK_MAX_CONCURRENT_POSITIONS", 3);
+
+        auto risk_manager = std::make_shared<risk::RiskManager>(
+            starting_balance,
+            max_position_fraction,
+            daily_loss_limit,
+            total_drawdown_kill,
+            max_concurrent_positions
+            // Circuit breaker defaults are fine for now
+        );
         
         auto router = std::make_shared<trading::exec::OrderRouter>(
             ioc, host, chain_id, verifying_contract, 

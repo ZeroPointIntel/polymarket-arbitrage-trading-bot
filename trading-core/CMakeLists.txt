@@ -36,6 +36,8 @@ set(SOURCES
     src/state/StateStore.cpp
     src/feeds/BinanceFeed.cpp
     src/feeds/PolymarketFeed.cpp
+    src/model/FairValueModel.cpp
+    src/risk/RiskManager.cpp
     src/exec/EIP712Signer.cpp
     src/exec/OrderRouter.cpp
 )
@@ -59,3 +61,12 @@ target_link_libraries(trading-core PRIVATE
     spdlog::spdlog
     secp256k1
 )
+
+# Test Executable for Phase 3
+add_executable(test_phase3
+    src/test_phase3.cpp
+    src/model/FairValueModel.cpp
+    src/risk/RiskManager.cpp
+)
+target_link_libraries(test_phase3 PRIVATE spdlog::spdlog)
+target_compile_definitions(test_phase3 PRIVATE SPDLOG_NO_EXCEPTIONS)
