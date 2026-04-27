@@ -1,0 +1,11 @@
+# Build outputs
+build/
+trading-core/build/
+
+# Python Virtual Environment
+.venv/
+venv/
+__pycache__/
+
+# OS files
+.DS_Store
