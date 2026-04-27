@@ -295,16 +295,10 @@ class PolymarketArbitrageBot:
         if not self.config.paper_mode:
             live_balance = await self.polymarket_client.get_portfolio_balance()
             if live_balance is not None and live_balance > 0:
-                # Set baseline BEFORE update_balance so _check_risk_thresholds
-                # sees 0% daily loss instead of comparing against stale config value.
-                self.risk_manager.set_daily_starting_balance(live_balance)
-                self.risk_manager.update_balance(live_balance)
-                # Clear daily halt if triggered by stale config balance at startup
-                if self.risk_manager._status == TradingStatus.DAILY_HALT:
-                    self.risk_manager._status = TradingStatus.ACTIVE
-                    self.risk_manager._kill_reason = None
-                    logger.info("Daily halt cleared — baseline reset to live $%.2f", live_balance)
-                logger.info("Live balance synced from blockchain: $%.2f USDC", live_balance)
+                # Replace the entire baseline tracking to match the actual live balance
+                # so that peak balance and drawdown calculations start from a true zero-point
+                # and don't mistakenly compare against the paper configuration default.
+                self.risk_manager.set_live_starting_balance(live_balance)
             else:
                 logger.warning(
                     "Could not fetch live balance — using config default $%.2f. "

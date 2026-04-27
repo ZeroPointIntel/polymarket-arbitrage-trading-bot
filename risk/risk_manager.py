@@ -486,6 +486,24 @@ class RiskManager:
         self._daily_starting_balance = balance
         logger.debug("Daily starting balance set to $%.2f", balance)
 
+    def set_live_starting_balance(self, balance: float) -> None:
+        """
+        Completely reset all baseline balance metrics to a new live value.
+        Used at startup to replace the initial paper configuration with 
+        the actual on-chain wallet balance so that peak/drawdown calculations
+        start from a true zero-point.
+        """
+        self._starting_balance = balance
+        self._current_balance = balance
+        self._peak_balance = balance
+        self._daily_starting_balance = balance
+        
+        if self._status in (TradingStatus.DAILY_HALT, TradingStatus.KILLED):
+            self._status = TradingStatus.ACTIVE
+            self._kill_reason = None
+            
+        logger.info("Live baseline balances reset to $%.2f", balance)
+
     def pause(self, reason: str = "Manual pause") -> None:
         """Pause trading (can be resumed)."""
         if self._status == TradingStatus.ACTIVE:
