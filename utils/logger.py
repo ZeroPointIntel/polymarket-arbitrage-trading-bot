@@ -3,12 +3,13 @@ Logging utilities.
 """
 
 import logging
+from logging.handlers import RotatingFileHandler
 import sys
 
 def setup_logging(log_file=None, log_level=logging.INFO):
     handlers = [logging.StreamHandler(sys.stdout)]
     if log_file:
-        handlers.append(logging.FileHandler(log_file))
+        handlers.append(RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5))
 
     if isinstance(log_level, str):
         log_level = log_level.upper()

@@ -898,24 +898,10 @@ class PolymarketClient:
             shares = round(usdc / current_price, 6) if current_price > 0 else 0.0
         else:
             # amount_usdc is shares to sell (caller passes position.size_shares)
-            recorded_shares = round(float(amount_usdc), 6)
-
-            # Use actual on-chain balance as authoritative share count.
-            # Falls back to recorded value only if API is unavailable.
-            actual_balance = await self.get_token_balance(token_id)
-            if actual_balance is not None:
-                shares = round(actual_balance, 6)
-                if abs(shares - recorded_shares) > 0.001:
-                    logger.info(
-                        "SELL shares: recorded=%.6f on-chain=%.6f | using on-chain | token=%s",
-                        recorded_shares, shares, token_id[:16],
-                    )
-            else:
-                shares = recorded_shares
-                logger.debug(
-                    "SELL shares: using recorded=%.6f (balance unavailable) | token=%s",
-                    shares, token_id[:16],
-                )
+            # We trust the recorded_shares parameter directly because on-chain balance
+            # checks via get_token_balance() suffer from indexing latency and will
+            # return stale (dust) balances during rapid dump-hedge exits.
+            shares = round(float(amount_usdc), 6)
 
             logger.info(
                 "[LIVE] SELL intent | shares=%.6f | price=%.4f | token=%s",
@@ -1117,61 +1103,58 @@ class PolymarketClient:
                 )
 
             if side.upper() == "BUY":
-                # FAK market orders may partially fill. Polymarket's post_order response
-                # echoes the original takerAmount, not the actual filled amount.
-                # To get the real matched size, we must fetch the updated token balance.
-                await asyncio.sleep(0.5)  # Let indexer catch up
-                actual_balance = await self.get_token_balance(token_id)
+                # For BUY market order:
+                # makingAmount is USDC spent (maker asset)
+                # takingAmount is SHARES received (taker asset)
+                making_raw = response.get("makingAmount") or response.get("making_amount")
+                taking_raw = response.get("takingAmount") or response.get("taking_amount")
                 
                 cost_usdc = amount_usdc
+                size_matched = round(amount_usdc / price, 6) if price > 0 else 0.0
                 price_matched = price
-                
-                if actual_balance is not None:
-                    size_matched = round(actual_balance, 6)
-                else:
-                    size_matched = round(amount_usdc / price, 6) if price > 0 else 0.0
 
-                if size_matched < (amount_usdc / price if price > 0 else 0.0) - 0.01:
-                    logger.warning(
-                        "[LIVE] BUY partial fill — confirmed: %.6f shares @ %.4f (requested %.4f shares)",
-                        size_matched, price_matched, (amount_usdc / price if price > 0 else 0.0),
+                try:
+                    if making_raw is not None and taking_raw is not None:
+                        mv = float(making_raw) / 1_000_000.0 if float(making_raw) > 100 else float(making_raw)
+                        tv = float(taking_raw) / 1_000_000.0 if float(taking_raw) > 100 else float(taking_raw)
+                        if mv > 0 and tv > 0:
+                            cost_usdc = mv
+                            size_matched = tv
+                            price_matched = round(mv / tv, 6)
+                except (ValueError, TypeError):
+                    pass
+
+                if abs(size_matched - (amount_usdc / price if price > 0 else 0.0)) > 0.001:
+                    logger.info(
+                        "[LIVE] BUY fill — confirmed: %.6f shares @ %.4f (cost $%.2f, est. %.4f shares)",
+                        size_matched, price_matched, cost_usdc, (amount_usdc / price if price > 0 else 0.0),
                     )
                 else:
                     logger.info("[LIVE] BUY fill — confirmed: %.6f shares @ %.4f", size_matched, price_matched)
             else:
-                size_matched = shares
-
-                # Try to read actual USDC proceeds from API response.
-                # Polymarket returns takingAmount in two possible formats:
-                #   - raw integer (e.g. 960000 → 0.96 USDC, divide by 1e6)
-                #   - already scaled float (e.g. 0.96)
-                # We use it when available and sane; fall back to estimate otherwise.
+                # For SELL market order:
+                # makingAmount is SHARES given (maker asset)
+                # takingAmount is USDC received (taker asset)
                 taking_raw = response.get("takingAmount") or response.get("taking_amount")
-                actual_usdc: float | None = None
-                if taking_raw is not None:
-                    try:
-                        v = float(taking_raw)
-                        if v > 100:           # raw format: divide by 1e6
-                            v /= 1_000_000
-                        if 0.001 < v < 10_000:  # sanity range
-                            actual_usdc = round(v, 6)
-                    except (ValueError, TypeError):
-                        pass
+                making_raw = response.get("makingAmount") or response.get("making_amount")
+                
+                size_matched = shares
+                price_matched = price
+                cost_usdc = round(shares * price, 4)
 
-                if actual_usdc is not None:
-                    cost_usdc     = actual_usdc
-                    price_matched = round(actual_usdc / shares, 6) if shares > 0 else price
-                    logger.info("[LIVE] SELL actual proceeds from API: $%.4f "
-                                "(takingAmount=%s) → fill price=%.4f",
-                                actual_usdc, taking_raw, price_matched)
-                else:
-                    # Fallback: use pre-order price estimate
-                    cost_usdc     = round(shares * price, 4)
-                    price_matched = price
-                    logger.warning("[LIVE] SELL takingAmount unavailable — "
-                                   "using estimated proceeds $%.4f (%.4f × %.4f). "
-                                   "PnL may be inaccurate.",
-                                   cost_usdc, shares, price)
+                try:
+                    if taking_raw is not None and making_raw is not None:
+                        tv = float(taking_raw) / 1_000_000.0 if float(taking_raw) > 100 else float(taking_raw)
+                        mv = float(making_raw) / 1_000_000.0 if float(making_raw) > 100 else float(making_raw)
+                        if tv > 0 and mv > 0:
+                            cost_usdc = tv
+                            size_matched = mv
+                            price_matched = round(tv / mv, 6)
+                except (ValueError, TypeError):
+                    pass
+
+                logger.info("[LIVE] SELL fill — confirmed: %.6f shares @ %.4f (proceeds $%.4f)",
+                             size_matched, price_matched, cost_usdc)
 
             logger.info(
                 "[LIVE] %s filled | ID: %s | %.4f shares @ %.4f | $%.4f USDC",

@@ -40,9 +40,37 @@ from typing import Callable, Dict, Optional, Set
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+import logging
 from utils.logger import get_logger
 
-logger = get_logger(__name__)
+_root_logger = get_logger(__name__)
+
+# Dedicated WebSocket logger that writes all WS traffic (including DEBUG) to a separate file
+ws_file_logger = logging.getLogger("pm_ws_file")
+ws_file_logger.setLevel(logging.DEBUG)
+ws_file_logger.propagate = False
+if not ws_file_logger.handlers:
+    _fh = logging.FileHandler("polymarket_ws.log")
+    _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    ws_file_logger.addHandler(_fh)
+
+class WSLoggerWrapper:
+    def debug(self, msg, *args, **kwargs):
+        ws_file_logger.debug(msg, *args, **kwargs)
+        
+    def info(self, msg, *args, **kwargs):
+        _root_logger.info(msg, *args, **kwargs)
+        ws_file_logger.info(msg, *args, **kwargs)
+        
+    def warning(self, msg, *args, **kwargs):
+        _root_logger.warning(msg, *args, **kwargs)
+        ws_file_logger.warning(msg, *args, **kwargs)
+        
+    def error(self, msg, *args, **kwargs):
+        _root_logger.error(msg, *args, **kwargs)
+        ws_file_logger.error(msg, *args, **kwargs)
+
+logger = WSLoggerWrapper()
 
 
 class PolymarketWSFeed:
