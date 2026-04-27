@@ -5,8 +5,10 @@
 #include "state/StateStore.h"
 #include "feeds/BinanceFeed.h"
 #include "feeds/PolymarketFeed.h"
+#include "feeds/GammaClient.h"
 #include "exec/OrderRouter.h"
 #include "risk/RiskManager.h"
+#include "signals/SignalEngine.h"
 #include <fstream>
 #include <map>
 #include <string>
@@ -28,48 +30,76 @@ std::map<std::string, std::string> load_env() {
     return env;
 }
 
+void run_evaluation_loop(boost::asio::steady_timer& timer, trading::SignalEngine& engine) {
+    timer.expires_after(std::chrono::milliseconds(50));
+    timer.async_wait([&](const boost::system::error_code& ec) {
+        if (!ec) {
+            double current_time_ms = std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
+            engine.tick(current_time_ms);
+            run_evaluation_loop(timer, engine);
+        }
+    });
+}
+
+void run_heartbeat(boost::asio::steady_timer& timer, std::shared_ptr<risk::RiskManager> risk_manager) {
+    timer.expires_after(std::chrono::seconds(10));
+    timer.async_wait([&, risk_manager](const boost::system::error_code& ec) {
+        if (!ec) {
+            spdlog::info("[HEARTBEAT] Status: {} | Balance: ${:.2f} | Open Positions: {} | Win Rate: {:.1f}%",
+                         static_cast<int>(risk_manager->get_status()),
+                         risk_manager->get_current_balance(),
+                         risk_manager->get_open_position_count(),
+                         risk_manager->get_win_rate() * 100.0);
+            run_heartbeat(timer, risk_manager);
+        }
+    });
+}
+
 int main() {
-    spdlog::set_level(spdlog::level::debug);
-    spdlog::info("Starting Polymarket Arbitrage Trading Core");
+    spdlog::set_level(spdlog::level::info);
+    spdlog::info("Starting Polymarket Arbitrage Trading Core - Phase 5");
 
     try {
         boost::asio::io_context ioc;
         boost::asio::ssl::context ctx(boost::asio::ssl::context::tlsv12_client);
         
-        // Use default root certs
         ctx.set_default_verify_paths();
-        // In production, we should strictly verify the peer, but for this dev stage we skip
         ctx.set_verify_mode(boost::asio::ssl::verify_none);
 
-        trading::StateStore store;
-        
-        // Start Binance
-        auto binance = std::make_shared<trading::BinanceFeed>(ioc, ctx, store, "btcusdt");
-        binance->start();
-
-        // Start Polymarket
-        auto polymarket = std::make_shared<trading::PolymarketFeed>(ioc, ctx, store);
-        polymarket->start();
-        
-        // In the real system, the Control Plane or Model would discover active token IDs
-        // and call subscribe on the polymarket feed. For now, we connect and wait.
-
-        // Setup signals to stop the io_context cleanly
-        boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
-        signals.async_wait([&](const boost::system::error_code&, int signal_number) {
-            spdlog::info("Received signal {}, shutting down...", signal_number);
-            binance->stop();
-            polymarket->stop();
-            ioc.stop();
-        });
-
         auto env = load_env();
-        bool paper_mode = (env["PAPER_MODE"] == "true");
+        bool paper_mode = (env["PAPER_MODE"] == "true" || env["PAPER_MODE"].empty()); // Default to true
         std::string chain_id = env["POLYMARKET_CHAIN_ID"].empty() ? "137" : env["POLYMARKET_CHAIN_ID"];
         std::string host = env["POLYMARKET_HOST"].empty() ? "https://clob.polymarket.com" : env["POLYMARKET_HOST"];
         std::string verifying_contract = "0x4bFB41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
         
-        // Load RiskManager limits from .env
+        trading::StateStore store;
+        
+        // 1. Fetch Active Market via Gamma
+        spdlog::info("Fetching active btc-updown-5m market from Gamma API...");
+        trading::GammaClient gamma(ioc, ctx);
+        auto market_opt = gamma.fetch_active_btc_market();
+        if (!market_opt) {
+            spdlog::critical("Failed to find active BTC market. Cannot continue.");
+            return EXIT_FAILURE;
+        }
+        trading::MarketInfo active_market = *market_opt;
+        spdlog::info("Discovered Market: {}", active_market.question);
+        spdlog::info("YES Token: {}", active_market.yes_token_id);
+        spdlog::info("NO Token: {}", active_market.no_token_id);
+        std::vector<trading::MarketInfo> active_markets = { active_market };
+
+        // 2. Start Binance Feed
+        auto binance = std::make_shared<trading::BinanceFeed>(ioc, ctx, store, "btcusdt");
+        binance->start();
+
+        // 3. Start Polymarket Feed and Subscribe to the discovered tokens
+        auto polymarket = std::make_shared<trading::PolymarketFeed>(ioc, ctx, store);
+        polymarket->start();
+        
+        std::vector<std::string> target_tokens = { active_market.yes_token_id, active_market.no_token_id };
+        polymarket->subscribe(target_tokens);
+
+        // 4. Initialize RiskManager
         auto parse_env_double = [&](const std::string& key, double default_val) {
             return env[key].empty() ? default_val : std::stod(env[key]);
         };
@@ -78,36 +108,43 @@ int main() {
         };
 
         double starting_balance = parse_env_double("PAPER_STARTING_BALANCE", 1000.0);
-        double max_position_fraction = parse_env_double("RISK_MAX_POSITION_FRACTION", 0.08);
-        double daily_loss_limit = parse_env_double("RISK_DAILY_LOSS_LIMIT", 0.20);
-        double total_drawdown_kill = parse_env_double("RISK_TOTAL_DRAWDOWN_KILL", 0.40);
-        int max_concurrent_positions = parse_env_int("RISK_MAX_CONCURRENT_POSITIONS", 3);
-
         auto risk_manager = std::make_shared<risk::RiskManager>(
             starting_balance,
-            max_position_fraction,
-            daily_loss_limit,
-            total_drawdown_kill,
-            max_concurrent_positions
-            // Circuit breaker defaults are fine for now
+            parse_env_double("RISK_MAX_POSITION_FRACTION", 0.08),
+            parse_env_double("RISK_DAILY_LOSS_LIMIT", 0.20),
+            parse_env_double("RISK_TOTAL_DRAWDOWN_KILL", 0.40),
+            parse_env_int("RISK_MAX_CONCURRENT_POSITIONS", 3)
         );
         
+        // 5. Initialize OrderRouter
         auto router = std::make_shared<trading::exec::OrderRouter>(
             ioc, host, chain_id, verifying_contract, 
             env["POLYMARKET_PRIVATE_KEY"], env["POLYMARKET_FUNDER"], paper_mode
         );
 
-        // Test EIP-712 execution locally via a timer
-        auto test_timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::seconds(5));
-        test_timer->async_wait([router](const boost::system::error_code& ec) {
-            if (!ec) {
-                spdlog::info("Dispatching test order to OrderRouter...");
-                // Note: Token ID must be a valid uint256 hex string
-                router->submit_order("0x0000000000000000000000000000000000000000000000000000000000000123", 0.45, 10.0, 0); // BUY 10 shares at 0.45
-            }
+        // 6. Initialize SignalEngine
+        trading::SignalEngine engine(store, risk_manager, router, active_markets);
+
+        // 7. Start the evaluation loop (50ms tick)
+        boost::asio::steady_timer eval_timer(ioc);
+        run_evaluation_loop(eval_timer, engine);
+
+        // 8. Start the heartbeat timer (10s)
+        boost::asio::steady_timer hb_timer(ioc);
+        run_heartbeat(hb_timer, risk_manager);
+
+        // Handle signals to stop the io_context cleanly
+        boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
+        signals.async_wait([&](const boost::system::error_code&, int signal_number) {
+            spdlog::info("Received signal {}, shutting down...", signal_number);
+            eval_timer.cancel();
+            hb_timer.cancel();
+            binance->stop();
+            polymarket->stop();
+            ioc.stop();
         });
 
-        spdlog::info("Initialization complete. Running event loop.");
+        spdlog::info("Initialization complete. Running live event loop.");
         ioc.run();
         
     } catch (const std::exception& e) {

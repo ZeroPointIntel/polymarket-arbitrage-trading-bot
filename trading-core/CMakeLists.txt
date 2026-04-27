@@ -36,6 +36,7 @@ set(SOURCES
     src/state/StateStore.cpp
     src/feeds/BinanceFeed.cpp
     src/feeds/PolymarketFeed.cpp
+    src/feeds/GammaClient.cpp
     src/model/FairValueModel.cpp
     src/risk/RiskManager.cpp
     src/exec/EIP712Signer.cpp
