@@ -1477,22 +1477,44 @@ class PolymarketClient:
     
     async def get_portfolio_balance(self) -> Optional[float]:
         """
-        Fetch the current USDC (collateral) balance via py-clob-client.
-        Uses AssetType.COLLATERAL — the correct type for USDC on Polygon.
-        The /balance HTTP endpoint does not exist on the Polymarket CLOB API.
+        Fetch the current USDC (collateral) balance.
+        Uses Web3 to check both Native USDC and bridged USDC.e on Polygon,
+        summing them up to determine the total available collateral.
+        Checks the correct wallet based on signature type (Proxy vs EOA).
         """
         if self.paper_mode or not self._client:
             return None
+            
         try:
-            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            from web3 import Web3
+            
+            # Use reliable public RPCs for Polygon
+            w3 = Web3(Web3.HTTPProvider("https://polygon.llamarpc.com"))
+            if not w3.is_connected():
+                w3 = Web3(Web3.HTTPProvider("https://polygon.drpc.org"))
+                
+            usdc_abi = [{"constant":True,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]
+            usdc_e_contract = w3.eth.contract(address="0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", abi=usdc_abi)
+            usdc_native_contract = w3.eth.contract(address="0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", abi=usdc_abi)
+            
+            # Determine which wallet holds the collateral based on signature type
+            target_address = self.funder if self.signature_type in (1, 2) else self._client.get_address()
+            if not target_address:
+                return 0.0
+                
+            target_address = w3.to_checksum_address(target_address)
+            
+            # Run blocking web3 calls in an executor
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(
-                None, self._client.get_balance_allowance, params
-            )
-            raw = float(data.get("balance") or 0)
-            # USDC on Polygon uses 6 decimals
-            return raw / 1_000_000.0
+            
+            def fetch_balances():
+                usdc_e = usdc_e_contract.functions.balanceOf(target_address).call()
+                usdc_native = usdc_native_contract.functions.balanceOf(target_address).call()
+                return (usdc_e + usdc_native) / 1_000_000.0
+                
+            total_balance = await loop.run_in_executor(None, fetch_balances)
+            return float(total_balance)
+            
         except Exception as exc:
-            logger.warning("Failed to fetch portfolio balance: %s", exc)
+            logger.warning("Failed to fetch portfolio balance via Web3: %s", exc)
             return None
