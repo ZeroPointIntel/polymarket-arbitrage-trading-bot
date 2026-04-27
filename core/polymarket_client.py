@@ -901,9 +901,9 @@ class PolymarketClient:
             recorded_shares = round(float(amount_usdc), 6)
 
             # Use actual on-chain balance as authoritative share count.
-            # Falls back to recorded value if API unavailable.
+            # Falls back to recorded value only if API is unavailable.
             actual_balance = await self.get_token_balance(token_id)
-            if actual_balance is not None and actual_balance > 0.01:
+            if actual_balance is not None:
                 shares = round(actual_balance, 6)
                 if abs(shares - recorded_shares) > 0.001:
                     logger.info(
@@ -1117,35 +1117,27 @@ class PolymarketClient:
                 )
 
             if side.upper() == "BUY":
-                # For BUY market order:
-                # makingAmount is USDC spent (maker asset)
-                # takingAmount is SHARES received (taker asset)
-                making_raw = response.get("makingAmount") or response.get("making_amount")
-                taking_raw = response.get("takingAmount") or response.get("taking_amount")
+                # FAK market orders may partially fill. Polymarket's post_order response
+                # echoes the original takerAmount, not the actual filled amount.
+                # To get the real matched size, we must fetch the updated token balance.
+                await asyncio.sleep(0.5)  # Let indexer catch up
+                actual_balance = await self.get_token_balance(token_id)
                 
                 cost_usdc = amount_usdc
-                size_matched = round(amount_usdc / price, 6) if price > 0 else 0.0
                 price_matched = price
+                
+                if actual_balance is not None:
+                    size_matched = round(actual_balance, 6)
+                else:
+                    size_matched = round(amount_usdc / price, 6) if price > 0 else 0.0
 
-                try:
-                    if making_raw is not None and taking_raw is not None:
-                        mv = float(making_raw) / 1_000_000.0 if float(making_raw) > 100 else float(making_raw)
-                        tv = float(taking_raw) / 1_000_000.0 if float(taking_raw) > 100 else float(taking_raw)
-                        if mv > 0 and tv > 0:
-                            cost_usdc = mv
-                            size_matched = tv
-                            price_matched = round(mv / tv, 6)
-                except (ValueError, TypeError):
-                    pass
-
-                if abs(size_matched - (amount_usdc / price if price > 0 else 0.0)) > 0.001:
-                    logger.info(
-                        "[LIVE] BUY fill — confirmed: %.6f shares @ %.4f (cost $%.2f, est. %.4f shares)",
-                        size_matched, price_matched, cost_usdc, (amount_usdc / price if price > 0 else 0.0),
+                if size_matched < (amount_usdc / price if price > 0 else 0.0) - 0.01:
+                    logger.warning(
+                        "[LIVE] BUY partial fill — confirmed: %.6f shares @ %.4f (requested %.4f shares)",
+                        size_matched, price_matched, (amount_usdc / price if price > 0 else 0.0),
                     )
                 else:
-                    logger.debug("[LIVE] BUY fill — confirmed: %.6f shares @ %.4f",
-                                 size_matched, price_matched)
+                    logger.info("[LIVE] BUY fill — confirmed: %.6f shares @ %.4f", size_matched, price_matched)
             else:
                 size_matched = shares
 
