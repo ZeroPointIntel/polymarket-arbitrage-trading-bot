@@ -5,7 +5,7 @@
 #include <boost/asio/strand.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/steady_timer.hpp>
-#include <simdjson.h>
+
 #include <string>
 #include <memory>
 #include <vector>
@@ -56,7 +56,6 @@ private:
     
     bool running_ = false;
     bool connected_ = false;
-    simdjson::ondemand::parser parser_;
 };
 
 } // namespace trading

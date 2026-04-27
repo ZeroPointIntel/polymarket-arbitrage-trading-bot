@@ -12,8 +12,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
 endif()
 
 # Find dependencies provided by Conan
-find_package(Boost REQUIRED COMPONENTS system thread)
-find_package(simdjson REQUIRED)
+find_package(Boost REQUIRED COMPONENTS system thread json)
 find_package(OpenSSL REQUIRED)
 find_package(spdlog REQUIRED)
 
@@ -30,11 +29,15 @@ add_executable(trading-core ${SOURCES})
 # Include directories
 target_include_directories(trading-core PRIVATE src)
 
+# Disable spdlog internal exceptions to bypass Apple Clang 15 C++20 consteval bugs
+target_compile_definitions(trading-core PRIVATE SPDLOG_NO_EXCEPTIONS)
+
 # Link dependencies
 target_link_libraries(trading-core PRIVATE
+    Boost::headers
     Boost::system
     Boost::thread
-    simdjson::simdjson
+    Boost::json
     OpenSSL::SSL
     OpenSSL::Crypto
     spdlog::spdlog

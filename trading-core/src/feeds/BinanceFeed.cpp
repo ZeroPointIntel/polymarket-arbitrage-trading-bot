@@ -1,5 +1,6 @@
 #include "BinanceFeed.h"
 #include <spdlog/spdlog.h>
+#include <boost/json.hpp>
 #include <chrono>
 #include <algorithm>
 #include <cctype>
@@ -125,36 +126,34 @@ void BinanceFeed::on_read(beast::error_code ec, std::size_t bytes_transferred) {
 
 void BinanceFeed::process_message(std::string_view msg) {
     try {
-        // Zero-allocation path requires padded string view if simdjson dictates it,
-        // but for now we use parse directly with padding enabled by default in simdjson 3+.
-        simdjson::padded_string json(msg);
-        simdjson::ondemand::document doc = parser_.iterate(json);
+        boost::json::value jv = boost::json::parse(msg);
         
-        std::string_view event_type = doc["e"].get_string();
-        if (event_type == "trade") {
-            PriceTick tick;
-            
-            // "p" comes as a string in Binance, we need to convert
-            std::string_view price_str = doc["p"].get_string();
-            tick.price = std::stod(std::string(price_str));
-            
-            tick.timestamp_ms = doc["T"].get_uint64();
-            
-            std::string_view qty_str = doc["q"].get_string();
-            tick.volume = std::stod(std::string(qty_str));
-            
-            auto now = std::chrono::system_clock::now();
-            tick.received_at = std::chrono::duration<double>(now.time_since_epoch()).count();
+        if (jv.is_object() && jv.as_object().contains("e") && jv.as_object().at("e").is_string()) {
+            auto event_type = jv.as_object().at("e").as_string();
+            if (event_type == "trade") {
+                PriceTick tick;
+                
+                std::string price_str(jv.as_object().at("p").as_string());
+                tick.price = std::stod(price_str);
+                
+                tick.timestamp_ms = jv.as_object().at("T").as_int64();
+                
+                std::string qty_str(jv.as_object().at("q").as_string());
+                tick.volume = std::stod(qty_str);
+                
+                auto now = std::chrono::system_clock::now();
+                tick.received_at = std::chrono::duration<double>(now.time_since_epoch()).count();
 
-            store_.update_btc_price(tick);
-            
-            // Log sample
-            static int count = 0;
-            if (++count % 500 == 0) {
-                spdlog::debug("BinanceFeed: tick #{} - ${:.2f}", count, tick.price);
+                store_.update_btc_price(tick);
+                
+                // Log sample
+                static int count = 0;
+                if (++count % 500 == 0) {
+                    spdlog::debug("BinanceFeed: tick #{} - ${:.2f}", count, tick.price);
+                }
             }
         }
-    } catch (const simdjson::simdjson_error& e) {
+    } catch (const boost::json::system_error& e) {
         spdlog::warn("BinanceFeed: JSON parse error: {}", e.what());
     } catch (const std::exception& e) {
         spdlog::warn("BinanceFeed: Error processing message: {}", e.what());
@@ -165,8 +164,7 @@ void BinanceFeed::reconnect() {
     if (!running_) return;
     spdlog::info("BinanceFeed: Reconnecting in 2 seconds...");
     
-    beast::error_code ec;
-    ws_.next_layer().next_layer().close(ec);
+    ws_.next_layer().next_layer().close();
 
     timer_.expires_after(std::chrono::seconds(2));
     timer_.async_wait([this](beast::error_code ec) {

@@ -1,6 +1,6 @@
 #include <iostream>
 #include <spdlog/spdlog.h>
-#include <boost/asio.h>
+#include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 #include "state/StateStore.h"
 #include "feeds/BinanceFeed.h"

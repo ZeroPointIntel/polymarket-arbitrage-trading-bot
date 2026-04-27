@@ -1,5 +1,6 @@
 #include "PolymarketFeed.h"
 #include <spdlog/spdlog.h>
+#include <boost/json.hpp>
 #include <chrono>
 
 namespace trading {
@@ -174,36 +175,39 @@ void PolymarketFeed::on_read(beast::error_code ec, std::size_t bytes_transferred
 
 void PolymarketFeed::process_message(std::string_view msg) {
     try {
-        simdjson::padded_string json(msg);
-        simdjson::ondemand::document doc = parser_.iterate(json);
+        boost::json::value jv = boost::json::parse(msg);
         
-        // Polymarket can send an array or a single object. We handle object first.
-        // Fast path check type
-        if (doc.type() == simdjson::ondemand::json_type::array) {
-            for (auto item : doc.get_array()) {
-                std::string_view event_type;
-                if (item["event_type"].get(event_type) == simdjson::SUCCESS) {
+        // Polymarket can send an array or a single object. We handle array of events.
+        if (jv.is_array()) {
+            for (const auto& item_val : jv.as_array()) {
+                if (!item_val.is_object()) continue;
+                const auto& item = item_val.as_object();
+                
+                if (item.contains("event_type") && item.at("event_type").is_string()) {
+                    auto event_type = item.at("event_type").as_string();
                     if (event_type == "price_change") {
-                        std::string_view asset_id = item["asset_id"];
-                        std::string_view price_str = item["price"];
-                        std::string_view side = item["side"];
-                        
-                        TokenPrice tp;
-                        tp.price = std::stod(std::string(price_str));
-                        
-                        // Inverse the side relative to the Maker
-                        tp.side = (side == "BUY") ? "SELL" : "BUY";
-                        
-                        auto now = std::chrono::system_clock::now();
-                        tp.ts = std::chrono::duration<double>(now.time_since_epoch()).count();
-                        
-                        store_.update_token_price(asset_id, tp);
+                        if (item.contains("asset_id") && item.contains("price") && item.contains("side")) {
+                            std::string asset_id(item.at("asset_id").as_string());
+                            std::string price_str(item.at("price").as_string());
+                            std::string side(item.at("side").as_string());
+                            
+                            TokenPrice tp;
+                            tp.price = std::stod(price_str);
+                            
+                            // Inverse the side relative to the Maker
+                            tp.side = (side == "BUY") ? "SELL" : "BUY";
+                            
+                            auto now = std::chrono::system_clock::now();
+                            tp.ts = std::chrono::duration<double>(now.time_since_epoch()).count();
+                            
+                            store_.update_token_price(asset_id, tp);
+                        }
                     }
                 }
             }
         }
-    } catch (const simdjson::simdjson_error& e) {
-        // Not a big deal, could be a ping response or other unknown message
+    } catch (const boost::json::system_error& e) {
+        // Not a big deal, could be a ping response or other non-json message
     } catch (const std::exception& e) {
         spdlog::warn("PolymarketFeed: Error processing message: {}", e.what());
     }
@@ -214,8 +218,7 @@ void PolymarketFeed::reconnect() {
     connected_ = false;
     spdlog::info("PolymarketFeed: Reconnecting in 2 seconds...");
     
-    beast::error_code ec;
-    ws_.next_layer().next_layer().close(ec);
+    ws_.next_layer().next_layer().close();
 
     timer_.expires_after(std::chrono::seconds(2));
     timer_.async_wait([this](beast::error_code ec) {

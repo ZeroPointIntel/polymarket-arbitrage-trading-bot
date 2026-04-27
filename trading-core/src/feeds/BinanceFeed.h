@@ -5,7 +5,7 @@
 #include <boost/asio/strand.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/steady_timer.hpp>
-#include <simdjson.h>
+
 #include <string>
 #include <memory>
 #include "../state/StateStore.h"
@@ -50,7 +50,6 @@ private:
     std::string path_;
     
     bool running_ = false;
-    simdjson::ondemand::parser parser_;
 };
 
 } // namespace trading
