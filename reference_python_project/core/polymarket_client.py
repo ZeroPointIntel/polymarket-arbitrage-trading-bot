@@ -1031,44 +1031,39 @@ class PolymarketClient:
             )
 
         try:
-            from py_clob_client.clob_types import MarketOrderArgs, OrderType
+            from py_clob_client.clob_types import OrderArgs, OrderType
             from py_clob_client.order_builder.constants import BUY, SELL
 
             clob_side = BUY if side.upper() == "BUY" else SELL
 
-            # MarketOrderArgs.amount semantics (confirmed from builder source):
-            #   BUY  → USDC to spend  (library computes shares = usdc / price)
-            #   SELL → shares to sell (library computes usdc  = shares * price)
-            mo_amount = amount_usdc if side.upper() == "BUY" else shares
-
             # Polymarket minimum: round_down(shares, 2) must be > 0 → shares >= 0.01
-            if side.upper() == "SELL" and mo_amount < 0.01:
+            if side.upper() == "SELL" and shares < 0.01:
                 logger.warning(
                     "[LIVE] SELL aborted — shares too small to trade: %.6f | token=%s",
-                    mo_amount, token_id[:16],
+                    shares, token_id[:16],
                 )
                 return OrderResult(
                     order_id="", status="error", token_id=token_id,
                     side=side, price=price, size=0.0, paper_mode=False,
                     timestamp=timestamp,
-                    error=f"SELL aborted: shares {mo_amount:.6f} below 0.01 minimum",
+                    error=f"SELL aborted: shares {shares:.6f} below 0.01 minimum",
                 )
 
             logger.debug(
-                "[LIVE] Submitting FAK %s | token=%s | amount=%.6f (%s)",
-                side, token_id[:16], mo_amount,
-                "USDC" if side.upper() == "BUY" else "shares",
+                "[LIVE] Submitting Limit FAK %s | token=%s | shares=%.6f | price=%.4f",
+                side, token_id[:16], shares, price,
             )
 
-            mo = MarketOrderArgs(
+            mo = OrderArgs(
                 token_id=token_id,
-                amount=mo_amount,
+                size=shares,
+                price=price,
                 side=clob_side,
             )
 
             loop = asyncio.get_event_loop()
             signed_order = await loop.run_in_executor(
-                None, self._client.create_market_order, mo
+                None, self._client.create_order, mo
             )
             response = await loop.run_in_executor(
                 None, self._client.post_order, signed_order, OrderType.FAK
@@ -1102,59 +1097,48 @@ class PolymarketClient:
                     timestamp=timestamp, error="FAK killed — no orders to match",
                 )
 
+            # We MUST fetch the true matched size from the order status, because the
+            # makingAmount/takingAmount fields in the post_order response are the 
+            # REQUESTED amounts, not the MATCHED amounts! Relying on them causes
+            # ghost positions if the FAK order only partially fills.
             if side.upper() == "BUY":
-                # For BUY market order:
-                # makingAmount is USDC spent (maker asset)
-                # takingAmount is SHARES received (taker asset)
-                making_raw = response.get("makingAmount") or response.get("making_amount")
-                taking_raw = response.get("takingAmount") or response.get("taking_amount")
-                
                 cost_usdc = amount_usdc
                 size_matched = round(amount_usdc / price, 6) if price > 0 else 0.0
-                price_matched = price
-
-                try:
-                    if making_raw is not None and taking_raw is not None:
-                        mv = float(making_raw) / 1_000_000.0 if float(making_raw) > 100 else float(making_raw)
-                        tv = float(taking_raw) / 1_000_000.0 if float(taking_raw) > 100 else float(taking_raw)
-                        if mv > 0 and tv > 0:
-                            cost_usdc = mv
-                            size_matched = tv
-                            price_matched = round(mv / tv, 6)
-                except (ValueError, TypeError):
-                    pass
-
-                if abs(size_matched - (amount_usdc / price if price > 0 else 0.0)) > 0.001:
-                    logger.info(
-                        "[LIVE] BUY fill — confirmed: %.6f shares @ %.4f (cost $%.2f, est. %.4f shares)",
-                        size_matched, price_matched, cost_usdc, (amount_usdc / price if price > 0 else 0.0),
-                    )
-                else:
-                    logger.info("[LIVE] BUY fill — confirmed: %.6f shares @ %.4f", size_matched, price_matched)
             else:
-                # For SELL market order:
-                # makingAmount is SHARES given (maker asset)
-                # takingAmount is USDC received (taker asset)
-                taking_raw = response.get("takingAmount") or response.get("taking_amount")
-                making_raw = response.get("makingAmount") or response.get("making_amount")
-                
-                size_matched = shares
-                price_matched = price
                 cost_usdc = round(shares * price, 4)
+                size_matched = shares
+            price_matched = price
 
+            sm_raw = response.get("sizeMatched") or response.get("size_matched")
+            if sm_raw is not None:
+                sm = float(sm_raw)
+                if sm > 1000:
+                    sm = sm / 1_000_000.0
+                size_matched = sm
+                cost_usdc = round(size_matched * price_matched, 4)
+            elif order_id:
                 try:
-                    if taking_raw is not None and making_raw is not None:
-                        tv = float(taking_raw) / 1_000_000.0 if float(taking_raw) > 100 else float(taking_raw)
-                        mv = float(making_raw) / 1_000_000.0 if float(making_raw) > 100 else float(making_raw)
-                        if tv > 0 and mv > 0:
-                            cost_usdc = tv
-                            size_matched = mv
-                            price_matched = round(tv / mv, 6)
-                except (ValueError, TypeError):
-                    pass
+                    await asyncio.sleep(0.15) # Brief pause for matching engine
+                    loop = asyncio.get_event_loop()
+                    order_status = await loop.run_in_executor(
+                        None, self._client.get_order, order_id
+                    )
+                    if isinstance(order_status, dict):
+                        sm_raw = order_status.get("size_matched") or order_status.get("sizeMatched")
+                        if sm_raw is not None:
+                            sm = float(sm_raw)
+                            if sm > 1000:
+                                sm = sm / 1_000_000.0
+                            if sm > 0:
+                                size_matched = sm
+                                cost_usdc = round(size_matched * price_matched, 4)
+                except Exception as e:
+                    logger.debug("[LIVE] Could not fetch get_order for %s, using estimated fill size: %s", order_id[:16], e)
 
-                logger.info("[LIVE] SELL fill — confirmed: %.6f shares @ %.4f (proceeds $%.4f)",
-                             size_matched, price_matched, cost_usdc)
+            if side.upper() == "BUY":
+                logger.info("[LIVE] BUY fill — confirmed: %.6f shares @ %.4f (cost $%.2f)", size_matched, price_matched, cost_usdc)
+            else:
+                logger.info("[LIVE] SELL fill — confirmed: %.6f shares @ %.4f (proceeds $%.4f)", size_matched, price_matched, cost_usdc)
 
             logger.info(
                 "[LIVE] %s filled | ID: %s | %.4f shares @ %.4f | $%.4f USDC",

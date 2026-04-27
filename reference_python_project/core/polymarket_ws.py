@@ -184,7 +184,8 @@ class PolymarketWSFeed:
         Returns:
             Latest price as float (0.0–1.0), or None if not available/stale.
         """
-        entry = self._prices.get(token_id)
+        key = token_id if side.upper() == "BUY" else f"{token_id}_bid"
+        entry = self._prices.get(key)
         if not entry:
             return None
         # Check staleness
@@ -436,8 +437,19 @@ class PolymarketWSFeed:
             logger.debug("PM WS: Ignoring out-of-range price %.4f for token %s", price, token_id[:16])
             return
 
+        # In Polymarket WS `price_change`:
+        # side="BUY" means Maker BUY = Bid (we SELL to this).
+        # side="SELL" means Maker SELL = Ask (we BUY from this).
+        pm_side = side.upper()
+        if pm_side == "BUY":
+            key = f"{token_id}_bid"
+            client_side = "SELL"
+        else:
+            key = token_id
+            client_side = "BUY"
+
         # Update cache
-        self._prices[token_id] = {"price": price, "side": side, "ts": ts}
+        self._prices[key] = {"price": price, "side": client_side, "ts": ts}
         self._total_updates += 1
         
         # Update MS lag if timestamp was provided by Polymarket

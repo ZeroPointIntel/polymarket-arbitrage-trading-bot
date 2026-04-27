@@ -605,6 +605,7 @@ class PolymarketArbitrageBot:
             print(f"├{LINE}┤")
             print(f"│  [E] + ENTER  →  exit  (positions left unresolved)    │")
             print(f"│  [C] + ENTER  →  continue running                     │")
+            print(f"│  [D] + ENTER  →  drain mode (no new trades, wait)     │")
             print(f"└{LINE}┘")
         else:
             print(f"\n┌{LINE}┐")
@@ -614,8 +615,12 @@ class PolymarketArbitrageBot:
 
         try:
             raw = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: input("Your choice [E/C]: ").strip().lower()
+                None, lambda: input("Your choice [E/C/D]: ").strip().lower()
             )
+            if raw.startswith("d"):
+                self.risk_manager.pause("Drain Mode active — halting new trades")
+                print("\nDrain Mode activated. Bot will continue running to close open positions.")
+                return False
             return raw.startswith("e")
         except (EOFError, KeyboardInterrupt):
             # Second Ctrl+C while prompt is showing → force exit
@@ -765,7 +770,49 @@ class PolymarketArbitrageBot:
             current_price = await self.polymarket_client.get_market_price(
                 position.token_id, "SELL"
             )
+
             if current_price is None:
+                age = time.time() - position.opened_at
+                if self.config.paper_mode:
+                    if age >= 30.0:
+                        logger.info("Position %s: prices unavailable after %.0fs (paper mode) — closing as resolved", order_id[:20], age)
+                        closed = self.risk_manager.register_trade_close(
+                            order_id=order_id,
+                            exit_price=position.entry_price,
+                            actual_proceeds_usdc=None,
+                        )
+                        if closed:
+                            self._sell_fail_count.pop(order_id, None)
+                            self._timeout_alerted.discard(order_id)
+                            if position.asset:
+                                self._asset_open_position.pop(position.asset, None)
+                                if self.edge_detector:
+                                    self.edge_detector.reset_cooldown(position.asset)
+                            
+                            self.telegram.send_trade_closed(
+                                order_id=order_id,
+                                pnl_usdc=closed.pnl_usdc,
+                                exit_price=position.entry_price,
+                                duration_seconds=closed.duration_seconds,
+                                paper_mode=self.config.paper_mode,
+                                entry_price=position.entry_price,
+                                size_usdc=position.cost_usdc,
+                                exit_reason="Market resolved (prices unavailable)",
+                                asset=position.asset,
+                                direction=position.direction,
+                            )
+                            if closed.pnl_usdc is not None:
+                                self.openclaw.push_trade_closed(
+                                    order_id=order_id,
+                                    pnl_usdc=closed.pnl_usdc,
+                                    exit_price=position.entry_price,
+                                    duration_seconds=closed.duration_seconds,
+                                    paper_mode=self.config.paper_mode,
+                                )
+                else:
+                    past_resolution = age > self.config.position_timeout_seconds + 30
+                    if position.condition_id and past_resolution and order_id not in self._auto_redeem_triggered:
+                        asyncio.create_task(self._attempt_auto_redeem(position))
                 continue
 
             should_exit = False
@@ -1096,6 +1143,50 @@ class PolymarketArbitrageBot:
         # DH requires equal shares. If partial fills differ, take the minimum to ensure a safe hedge.
         actual_combined = yes_result.price + no_result.price
         actual_size = min(yes_result.size, no_result.size)
+        
+        # ── Fix for Order Size Desync ──
+        # If one leg partially filled less than the other, we MUST sell the excess
+        # shares of the overfilled leg to remain perfectly hedged.
+        yes_excess = yes_result.size - actual_size
+        if yes_excess >= 0.01:
+            logger.warning(
+                "DH leg mismatch! YES overfilled by %.4f shares (YES=%.4f, NO=%.4f). Selling excess.", 
+                yes_excess, yes_result.size, no_result.size
+            )
+            # Send alert to user
+            self.telegram.send_risk_alert(
+                "DHSizingMismatch",
+                f"Partial fill mismatch on {asset.upper()}: YES={yes_result.size:.2f}, NO={no_result.size:.2f}. "
+                f"Selling {yes_excess:.2f} excess YES shares to balance hedge.",
+                severity="WARNING"
+            )
+            await self.polymarket_client.place_market_order(
+                token_id=signal.yes_token_id,
+                side="SELL",
+                amount_usdc=yes_excess,
+                market_info=signal.market,
+            )
+
+        no_excess = no_result.size - actual_size
+        if no_excess >= 0.01:
+            logger.warning(
+                "DH leg mismatch! NO overfilled by %.4f shares (YES=%.4f, NO=%.4f). Selling excess.", 
+                no_excess, yes_result.size, no_result.size
+            )
+            # Send alert to user
+            self.telegram.send_risk_alert(
+                "DHSizingMismatch",
+                f"Partial fill mismatch on {asset.upper()}: YES={yes_result.size:.2f}, NO={no_result.size:.2f}. "
+                f"Selling {no_excess:.2f} excess NO shares to balance hedge.",
+                severity="WARNING"
+            )
+            await self.polymarket_client.place_market_order(
+                token_id=signal.no_token_id,
+                side="SELL",
+                amount_usdc=no_excess,
+                market_info=signal.market,
+            )
+
         if actual_size < 0.01:
             logger.error("DH sizing failed (actual_size < 0.01). Aborting.")
             self._asset_open_dh_position.pop(asset, None)
@@ -1671,12 +1762,11 @@ async def main() -> None:
     args = parse_args()
     config = BotConfig()
 
-    # Apply CLI overrides
+    # Apply CLI overrides (default is paper mode for safety)
     if args.live:
         config.paper_mode = False
     elif args.paper:
         config.paper_mode = True
-    # Default: respect PAPER_MODE env variable
 
     if args.log_level:
         config.log_level = args.log_level

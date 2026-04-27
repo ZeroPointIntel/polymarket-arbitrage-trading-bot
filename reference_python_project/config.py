@@ -184,7 +184,8 @@ POSITION_TIMEOUT_SECONDS: float = (
 # ─────────────────────────────────────────────────────────────────────────────
 # Paper Trading Mode
 # ─────────────────────────────────────────────────────────────────────────────
-PAPER_MODE: bool = os.getenv("PAPER_MODE", "true").lower() == "true"
+# Paper mode is strictly driven by CLI arguments (--paper / --live). Default is True.
+PAPER_MODE: bool = True
 PAPER_STARTING_BALANCE: float = float(os.getenv("PAPER_STARTING_BALANCE", "1000.0"))
 # Inject random fill slippage in paper mode to simulate real market conditions.
 # 0.005 = ±0.5% noise on fill price (adverse direction). 0.0 = disabled.
