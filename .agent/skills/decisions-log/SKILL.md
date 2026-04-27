@@ -12,14 +12,6 @@ description: >
 > Architectural decision log.
 > AI agents: treat these as immutable constraints unless a human explicitly reopens a decision.
 
-<!-- ================================================================
-  SETUP INSTRUCTIONS (remove this block when done)
-  1. Delete the example decisions below (D-001 through D-003)
-  2. Add your own decisions using the template
-  3. Keep the template and the "Adding a New Decision" section
-  4. Delete these comments
-================================================================ -->
-
 ---
 
 ## Template
@@ -38,62 +30,23 @@ Date: YYYY-MM-DD
 
 ---
 
-## Example Decisions
-<!-- Replace these with your own. They are illustrative only. -->
-
-## D-001: {{Framework Choice}}
+## D-001: Separation of C++ Core and WebAuthn Control Plane
 
 **Status:** Accepted
-**Date:** {{YYYY-MM-DD}}
+**Date:** 2026-04-27
 
-**Decision:** {{e.g. Use Next.js App Router rather than Pages Router.}}
+**Decision:** Isolate all trading execution and signal logic in a zero-allocation C++20 core, communicating via gRPC with a Next.js (Node.js) WebAuthn-gated API gateway.
 
-**Context:** {{Why was this decision needed?}}
+**Context:** The Python implementation struggled with consistent low-latency execution and had a dashboard/execution environment coupled in the same process, increasing security risk if exposed to the internet.
 
-**Rationale:** {{Why this option? What made it the right choice?}}
-
-**Consequences:**
-- {{What does this mean for the codebase going forward?}}
-- {{Any trade-offs or ongoing constraints?}}
-
-**Rejected:** {{What alternatives were considered and why they lost.}}
-
----
-
-## D-002: {{State Management}}
-
-**Status:** Accepted
-**Date:** {{YYYY-MM-DD}}
-
-**Decision:** {{e.g. Zustand for global UI state, React Query for server state.}}
-
-**Context:** {{Why was a decision needed here?}}
-
-**Rationale:** {{Why this combination?}}
+**Rationale:** C++ provides the absolute lowest tail latency for Strategy A (Latency Arb), maximizing the edge captured before oracle updates. Offloading the UI and API layer to Next.js ensures the C++ core is never directly exposed to HTTP traffic or the public internet. WebAuthn ensures unphishable control over critical bot state.
 
 **Consequences:**
-- {{What this means for how state is written.}}
+- The trading core must be written in C++20 and use `simdjson` + `Boost.Asio`/`io_uring` for optimal performance.
+- Polymarket EIP-712 order signing must be implemented in C++ or via Rust FFI.
+- The Node.js gateway handles all history, UI state, and user interactions, passing intent down to the C++ core via gRPC.
 
-**Rejected:** {{e.g. Redux (too much boilerplate), SWR (weaker mutation handling).}}
-
----
-
-## D-003: {{Auth Strategy}}
-
-**Status:** Accepted
-**Date:** {{YYYY-MM-DD}}
-
-**Decision:** {{e.g. JWT in httpOnly cookies / localStorage / NextAuth.}}
-
-**Context:** {{Why was an auth decision needed?}}
-
-**Rationale:** {{Why this approach?}}
-
-**Consequences:**
-- {{Security implications.}}
-- {{How tokens are accessed in code.}}
-
-**Rejected:** {{Alternatives considered.}}
+**Rejected:** Pure Python (too slow for tail latency), Rust (user preferred C++ for the core), Hybrid Python/C++ (decided against middle paths to simplify the stack to just pure C++ for execution and TS for UI).
 
 ---
 
