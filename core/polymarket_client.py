@@ -1117,29 +1117,34 @@ class PolymarketClient:
                 )
 
             if side.upper() == "BUY":
-                cost_usdc = amount_usdc
-                # Back-calculate fill price from makingAmount so Position.size_shares
-                # reflects the actual fill rather than the pre-order estimate.
+                # For BUY market order:
+                # makingAmount is USDC spent (maker asset)
+                # takingAmount is SHARES received (taker asset)
                 making_raw = response.get("makingAmount") or response.get("making_amount")
-                confirmed_price: float | None = None
-                if making_raw is not None:
-                    try:
-                        mv = float(making_raw)
-                        if mv > 100:           # raw format: shares in 1e6 units
-                            mv /= 1_000_000
-                        if 0.0 < mv < 1_000_000:
-                            confirmed_price = round(amount_usdc / mv, 6) if mv > 0 else None
-                    except (ValueError, TypeError):
-                        pass
-                price_matched = confirmed_price if confirmed_price and 0.001 < confirmed_price < 1.0 else price
-                size_matched  = round(amount_usdc / price_matched, 6) if price_matched > 0 else 0.0
-                if confirmed_price and abs(confirmed_price - price) > 0.001:
+                taking_raw = response.get("takingAmount") or response.get("taking_amount")
+                
+                cost_usdc = amount_usdc
+                size_matched = round(amount_usdc / price, 6) if price > 0 else 0.0
+                price_matched = price
+
+                try:
+                    if making_raw is not None and taking_raw is not None:
+                        mv = float(making_raw) / 1_000_000.0 if float(making_raw) > 100 else float(making_raw)
+                        tv = float(taking_raw) / 1_000_000.0 if float(taking_raw) > 100 else float(taking_raw)
+                        if mv > 0 and tv > 0:
+                            cost_usdc = mv
+                            size_matched = tv
+                            price_matched = round(mv / tv, 6)
+                except (ValueError, TypeError):
+                    pass
+
+                if abs(size_matched - (amount_usdc / price if price > 0 else 0.0)) > 0.001:
                     logger.info(
-                        "[LIVE] BUY fill — confirmed: %.6f shares @ %.4f (estimated %.4f)",
-                        size_matched, price_matched, price,
+                        "[LIVE] BUY fill — confirmed: %.6f shares @ %.4f (cost $%.2f, est. %.4f shares)",
+                        size_matched, price_matched, cost_usdc, (amount_usdc / price if price > 0 else 0.0),
                     )
                 else:
-                    logger.debug("[LIVE] BUY fill — estimated: %.6f shares @ %.4f",
+                    logger.debug("[LIVE] BUY fill — confirmed: %.6f shares @ %.4f",
                                  size_matched, price_matched)
             else:
                 size_matched = shares
