@@ -9,7 +9,9 @@ namespace trading {
 
 BinanceFeed::BinanceFeed(net::io_context& ioc, ssl::context& ctx, StateStore& store, std::string symbol)
     : resolver_(net::make_strand(ioc)),
-      ws_(net::make_strand(ioc), ctx),
+      ioc_(ioc),
+      ctx_(ctx),
+      ws_(std::in_place, net::make_strand(ioc), ctx),
       timer_(net::make_strand(ioc)),
       store_(store),
       symbol_(std::move(symbol)) {
@@ -29,9 +31,9 @@ void BinanceFeed::start() {
 void BinanceFeed::stop() {
     running_ = false;
     timer_.cancel();
-    if (ws_.is_open()) {
+    if (ws_ && ws_->is_open()) {
         beast::error_code ec;
-        ws_.close(websocket::close_code::normal, ec);
+        ws_->close(websocket::close_code::normal, ec);
     }
 }
 
@@ -50,8 +52,8 @@ void BinanceFeed::on_resolve(beast::error_code ec, tcp::resolver::results_type r
         return reconnect();
     }
     
-    beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(10));
-    beast::get_lowest_layer(ws_).async_connect(
+    beast::get_lowest_layer(*ws_).expires_after(std::chrono::seconds(10));
+    beast::get_lowest_layer(*ws_).async_connect(
         results,
         beast::bind_front_handler(&BinanceFeed::on_connect, shared_from_this()));
 }
@@ -62,15 +64,15 @@ void BinanceFeed::on_connect(beast::error_code ec, tcp::resolver::results_type::
         return reconnect();
     }
 
-    beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(10));
+    beast::get_lowest_layer(*ws_).expires_after(std::chrono::seconds(10));
 
-    if(! SSL_set_tlsext_host_name(ws_.next_layer().native_handle(), host_.c_str())) {
+    if(! SSL_set_tlsext_host_name(ws_->next_layer().native_handle(), host_.c_str())) {
         beast::error_code err{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
         spdlog::error("BinanceFeed: SNI error: {}", err.message());
         return reconnect();
     }
 
-    ws_.next_layer().async_handshake(
+    ws_->next_layer().async_handshake(
         ssl::stream_base::client,
         beast::bind_front_handler(&BinanceFeed::on_ssl_handshake, shared_from_this()));
 }
@@ -81,15 +83,15 @@ void BinanceFeed::on_ssl_handshake(beast::error_code ec) {
         return reconnect();
     }
 
-    beast::get_lowest_layer(ws_).expires_never();
-    ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+    beast::get_lowest_layer(*ws_).expires_never();
+    ws_->set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
 
-    ws_.set_option(websocket::stream_base::decorator(
+    ws_->set_option(websocket::stream_base::decorator(
         [](websocket::request_type& req) {
             req.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
         }));
 
-    ws_.async_handshake(host_, path_,
+    ws_->async_handshake(host_, path_,
         beast::bind_front_handler(&BinanceFeed::on_handshake, shared_from_this()));
 }
 
@@ -105,8 +107,10 @@ void BinanceFeed::on_handshake(beast::error_code ec) {
 
 void BinanceFeed::do_read() {
     if (!running_) return;
-    ws_.async_read(buffer_,
-        beast::bind_front_handler(&BinanceFeed::on_read, shared_from_this()));
+    if (ws_) {
+        ws_->async_read(buffer_,
+            beast::bind_front_handler(&BinanceFeed::on_read, shared_from_this()));
+    }
 }
 
 void BinanceFeed::on_read(beast::error_code ec, std::size_t bytes_transferred) {
@@ -164,11 +168,14 @@ void BinanceFeed::reconnect() {
     if (!running_) return;
     spdlog::info("BinanceFeed: Reconnecting in 2 seconds...");
     
-    ws_.next_layer().next_layer().close();
+    if (ws_) {
+        ws_->next_layer().next_layer().close();
+    }
 
     timer_.expires_after(std::chrono::seconds(2));
     timer_.async_wait([this](beast::error_code ec) {
         if (!ec && running_) {
+            ws_.emplace(net::make_strand(ioc_), ctx_);
             resolve();
         }
     });

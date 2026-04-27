@@ -9,6 +9,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <optional>
 #include "../state/StateStore.h"
 
 namespace trading {
@@ -42,7 +43,9 @@ private:
     void send_ping();
 
     tcp::resolver resolver_;
-    websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws_;
+    net::io_context& ioc_;
+    ssl::context& ctx_;
+    std::optional<websocket::stream<beast::ssl_stream<beast::tcp_stream>>> ws_;
     net::steady_timer timer_;
     net::steady_timer ping_timer_;
     beast::flat_buffer buffer_;

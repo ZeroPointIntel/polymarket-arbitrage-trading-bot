@@ -16,12 +16,28 @@ find_package(Boost REQUIRED COMPONENTS system thread json)
 find_package(OpenSSL REQUIRED)
 find_package(spdlog REQUIRED)
 
+# Fetch libsecp256k1 for EIP-712 signing
+include(FetchContent)
+set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "" FORCE)
+set(SECP256K1_ENABLE_MODULE_EXTRAKEYS ON CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXHAUSTIVE_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  secp256k1
+  GIT_REPOSITORY https://github.com/bitcoin-core/secp256k1.git
+  GIT_TAG        v0.7.1
+)
+FetchContent_MakeAvailable(secp256k1)
+
 # Add source files
 set(SOURCES
     src/main.cpp
     src/state/StateStore.cpp
     src/feeds/BinanceFeed.cpp
     src/feeds/PolymarketFeed.cpp
+    src/exec/EIP712Signer.cpp
+    src/exec/OrderRouter.cpp
 )
 
 add_executable(trading-core ${SOURCES})
@@ -41,4 +57,5 @@ target_link_libraries(trading-core PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
     spdlog::spdlog
+    secp256k1
 )

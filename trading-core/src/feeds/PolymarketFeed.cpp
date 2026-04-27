@@ -7,7 +7,9 @@ namespace trading {
 
 PolymarketFeed::PolymarketFeed(net::io_context& ioc, ssl::context& ctx, StateStore& store)
     : resolver_(net::make_strand(ioc)),
-      ws_(net::make_strand(ioc), ctx),
+      ioc_(ioc),
+      ctx_(ctx),
+      ws_(std::in_place, net::make_strand(ioc), ctx),
       timer_(net::make_strand(ioc)),
       ping_timer_(net::make_strand(ioc)),
       store_(store) {}
@@ -24,9 +26,9 @@ void PolymarketFeed::stop() {
     connected_ = false;
     timer_.cancel();
     ping_timer_.cancel();
-    if (ws_.is_open()) {
+    if (ws_ && ws_->is_open()) {
         beast::error_code ec;
-        ws_.close(websocket::close_code::normal, ec);
+        ws_->close(websocket::close_code::normal, ec);
     }
 }
 
@@ -45,13 +47,15 @@ void PolymarketFeed::subscribe(const std::vector<std::string>& token_ids) {
         }
         json += "]}";
         
-        ws_.async_write(net::buffer(json), [](beast::error_code ec, std::size_t) {
-            if (ec) {
-                spdlog::warn("PolymarketFeed: Failed to subscribe: {}", ec.message());
-            } else {
-                spdlog::info("PolymarketFeed: Subscription sent.");
-            }
-        });
+        if (ws_) {
+            ws_->async_write(net::buffer(json), [](beast::error_code ec, std::size_t) {
+                if (ec) {
+                    spdlog::warn("PolymarketFeed: Failed to subscribe: {}", ec.message());
+                } else {
+                    spdlog::info("PolymarketFeed: Subscription sent.");
+                }
+            });
+        }
     }
 }
 
@@ -70,8 +74,8 @@ void PolymarketFeed::on_resolve(beast::error_code ec, tcp::resolver::results_typ
         return reconnect();
     }
     
-    beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(10));
-    beast::get_lowest_layer(ws_).async_connect(
+    beast::get_lowest_layer(*ws_).expires_after(std::chrono::seconds(10));
+    beast::get_lowest_layer(*ws_).async_connect(
         results,
         beast::bind_front_handler(&PolymarketFeed::on_connect, shared_from_this()));
 }
@@ -82,15 +86,15 @@ void PolymarketFeed::on_connect(beast::error_code ec, tcp::resolver::results_typ
         return reconnect();
     }
 
-    beast::get_lowest_layer(ws_).expires_after(std::chrono::seconds(10));
+    beast::get_lowest_layer(*ws_).expires_after(std::chrono::seconds(10));
 
-    if(! SSL_set_tlsext_host_name(ws_.next_layer().native_handle(), host_.c_str())) {
+    if(! SSL_set_tlsext_host_name(ws_->next_layer().native_handle(), host_.c_str())) {
         beast::error_code err{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
         spdlog::error("PolymarketFeed: SNI error: {}", err.message());
         return reconnect();
     }
 
-    ws_.next_layer().async_handshake(
+    ws_->next_layer().async_handshake(
         ssl::stream_base::client,
         beast::bind_front_handler(&PolymarketFeed::on_ssl_handshake, shared_from_this()));
 }
@@ -101,16 +105,16 @@ void PolymarketFeed::on_ssl_handshake(beast::error_code ec) {
         return reconnect();
     }
 
-    beast::get_lowest_layer(ws_).expires_never();
+    beast::get_lowest_layer(*ws_).expires_never();
     
     // Polymarket requires specific headers
-    ws_.set_option(websocket::stream_base::decorator(
+    ws_->set_option(websocket::stream_base::decorator(
         [](websocket::request_type& req) {
             req.set(http::field::user_agent, "Mozilla/5.0 (C++ Trading Core)");
             req.set(http::field::origin, "https://polymarket.com");
         }));
 
-    ws_.async_handshake(host_, path_,
+    ws_->async_handshake(host_, path_,
         beast::bind_front_handler(&PolymarketFeed::on_handshake, shared_from_this()));
 }
 
@@ -140,22 +144,26 @@ void PolymarketFeed::send_ping() {
     ping_timer_.expires_after(std::chrono::seconds(5));
     ping_timer_.async_wait([this](beast::error_code ec) {
         if (!ec && running_ && connected_) {
-            ws_.async_write(net::buffer("{\"type\":\"ping\"}"), 
-                [this](beast::error_code write_ec, std::size_t) {
-                    if (write_ec) {
-                        spdlog::warn("PolymarketFeed: Ping failed: {}", write_ec.message());
-                    } else {
-                        send_ping();
-                    }
-                });
+            if (ws_) {
+                ws_->async_write(net::buffer("{\"type\":\"ping\"}"), 
+                    [this](beast::error_code write_ec, std::size_t) {
+                        if (write_ec) {
+                            spdlog::warn("PolymarketFeed: Ping failed: {}", write_ec.message());
+                        } else {
+                            send_ping();
+                        }
+                    });
+            }
         }
     });
 }
 
 void PolymarketFeed::do_read() {
     if (!running_) return;
-    ws_.async_read(buffer_,
-        beast::bind_front_handler(&PolymarketFeed::on_read, shared_from_this()));
+    if (ws_) {
+        ws_->async_read(buffer_,
+            beast::bind_front_handler(&PolymarketFeed::on_read, shared_from_this()));
+    }
 }
 
 void PolymarketFeed::on_read(beast::error_code ec, std::size_t bytes_transferred) {
@@ -218,11 +226,15 @@ void PolymarketFeed::reconnect() {
     connected_ = false;
     spdlog::info("PolymarketFeed: Reconnecting in 2 seconds...");
     
-    ws_.next_layer().next_layer().close();
+    if (ws_) {
+        ws_->next_layer().next_layer().close();
+    }
+    ping_timer_.cancel();
 
     timer_.expires_after(std::chrono::seconds(2));
     timer_.async_wait([this](beast::error_code ec) {
         if (!ec && running_) {
+            ws_.emplace(net::make_strand(ioc_), ctx_);
             resolve();
         }
     });
