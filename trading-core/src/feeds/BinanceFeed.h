@@ -1,0 +1,56 @@
+#pragma once
+#include <boost/beast/core.hpp>
+#include <boost/beast/websocket.hpp>
+#include <boost/beast/ssl.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <simdjson.h>
+#include <string>
+#include <memory>
+#include "../state/StateStore.h"
+
+namespace trading {
+
+namespace beast = boost::beast;
+namespace http = beast::http;
+namespace websocket = beast::websocket;
+namespace net = boost::asio;
+namespace ssl = boost::asio::ssl;
+using tcp = boost::asio::ip::tcp;
+
+class BinanceFeed : public std::enable_shared_from_this<BinanceFeed> {
+public:
+    explicit BinanceFeed(net::io_context& ioc, ssl::context& ctx, StateStore& store, std::string symbol);
+    ~BinanceFeed();
+
+    void start();
+    void stop();
+
+private:
+    void resolve();
+    void on_resolve(beast::error_code ec, tcp::resolver::results_type results);
+    void on_connect(beast::error_code ec, tcp::resolver::results_type::endpoint_type ep);
+    void on_ssl_handshake(beast::error_code ec);
+    void on_handshake(beast::error_code ec);
+    void do_read();
+    void on_read(beast::error_code ec, std::size_t bytes_transferred);
+    void process_message(std::string_view msg);
+    void reconnect();
+
+    tcp::resolver resolver_;
+    websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws_;
+    net::steady_timer timer_;
+    beast::flat_buffer buffer_;
+    
+    StateStore& store_;
+    std::string symbol_;
+    std::string host_ = "stream.binance.com";
+    std::string port_ = "9443";
+    std::string path_;
+    
+    bool running_ = false;
+    simdjson::ondemand::parser parser_;
+};
+
+} // namespace trading
