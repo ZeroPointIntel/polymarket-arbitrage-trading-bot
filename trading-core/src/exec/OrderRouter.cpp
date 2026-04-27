@@ -25,11 +25,11 @@ OrderRouter::OrderRouter(boost::asio::io_context& ioc,
                          const std::string& private_key_hex,
                          const std::string& funder_address,
                          bool paper_mode)
-    : ioc_(ioc), 
-      clob_api_url_(clob_api_url), 
+    : clob_api_url_(clob_api_url), 
       funder_address_(funder_address),
       paper_mode_(paper_mode) {
     
+    (void)ioc;
     uint64_t chain_id = std::stoull(chain_id_str);
     signer_ = std::make_unique<EIP712Signer>(chain_id, verifying_contract, private_key_hex);
     

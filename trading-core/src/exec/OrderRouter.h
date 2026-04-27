@@ -27,7 +27,6 @@ public:
                       uint8_t side);
 
 private:
-    boost::asio::io_context& ioc_;
     std::string clob_api_url_;
     std::string funder_address_;
     bool paper_mode_;
