@@ -40,6 +40,9 @@ set(SOURCES
     src/risk/RiskManager.cpp
     src/exec/EIP712Signer.cpp
     src/exec/OrderRouter.cpp
+    src/signals/LatencyArbDetector.cpp
+    src/signals/DumpHedgeDetector.cpp
+    src/signals/SignalEngine.cpp
 )
 
 add_executable(trading-core ${SOURCES})
@@ -70,3 +73,27 @@ add_executable(test_phase3
 )
 target_link_libraries(test_phase3 PRIVATE spdlog::spdlog)
 target_compile_definitions(test_phase3 PRIVATE SPDLOG_NO_EXCEPTIONS)
+
+# Test Executable for Phase 4
+add_executable(test_phase4
+    src/test_phase4.cpp
+    src/state/StateStore.cpp
+    src/model/FairValueModel.cpp
+    src/risk/RiskManager.cpp
+    src/signals/LatencyArbDetector.cpp
+    src/signals/DumpHedgeDetector.cpp
+    src/signals/SignalEngine.cpp
+    src/exec/OrderRouter.cpp
+    src/exec/EIP712Signer.cpp
+)
+target_link_libraries(test_phase4 PRIVATE 
+    spdlog::spdlog 
+    fmt::fmt 
+    Boost::headers 
+    Boost::system
+    Boost::json
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    secp256k1
+)
+target_compile_definitions(test_phase4 PRIVATE SPDLOG_NO_EXCEPTIONS)
