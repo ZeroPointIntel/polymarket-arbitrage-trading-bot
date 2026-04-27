@@ -1026,8 +1026,9 @@ class PolymarketArbitrageBot:
             amount_usdc=yes_usdc,
             market_info=signal.market,
         )
-        if not yes_result.success:
-            logger.error("DH YES leg failed: %s", yes_result.error)
+        if not yes_result.success or yes_result.size < 0.01:
+            err = yes_result.error or f"Partial fill too small ({yes_result.size:.4f} shares)"
+            logger.error("DH YES leg failed or missed liquidity: %s", err)
             self._asset_open_dh_position.pop(asset, None)
             self.dh_detector.reset_cooldown(asset)
             return
@@ -1039,10 +1040,11 @@ class PolymarketArbitrageBot:
             amount_usdc=no_usdc,
             market_info=signal.market,
         )
-        if not no_result.success:
+        if not no_result.success or no_result.size < 0.01:
+            err = no_result.error or f"Partial fill too small ({no_result.size:.4f} shares)"
             logger.error(
-                "DH NO leg failed after YES filled: %s — attempting to sell YES position.",
-                no_result.error,
+                "DH NO leg failed or missed liquidity after YES filled: %s — attempting to sell YES position.",
+                err,
             )
             # Try to recover by selling the YES position so capital is returned.
             yes_sell_result = await self.polymarket_client.place_market_order(
@@ -1090,8 +1092,15 @@ class PolymarketArbitrageBot:
         # Promote PENDING sentinel to the real dh_id
         self._asset_open_dh_position[asset] = dh_id
 
-        # Use actual fill prices from order results for accurate PnL tracking.
+        # Use actual fill prices and actual matched sizes.
+        # DH requires equal shares. If partial fills differ, take the minimum to ensure a safe hedge.
         actual_combined = yes_result.price + no_result.price
+        actual_size = min(yes_result.size, no_result.size)
+        if actual_size < 0.01:
+            logger.error("DH sizing failed (actual_size < 0.01). Aborting.")
+            self._asset_open_dh_position.pop(asset, None)
+            return
+            
         position = DumpHedgePosition(
             dh_id=dh_id,
             yes_order_id=yes_result.order_id,
@@ -1103,9 +1112,9 @@ class PolymarketArbitrageBot:
             yes_entry_price=yes_result.price,
             no_entry_price=no_result.price,
             combined_entry_price=actual_combined,
-            size_shares=size_shares,
-            combined_cost_usdc=actual_combined * size_shares,
-            locked_profit_usdc=(1.0 - actual_combined) * size_shares,
+            size_shares=actual_size,
+            combined_cost_usdc=actual_combined * actual_size,
+            locked_profit_usdc=(1.0 - actual_combined) * actual_size,
             opened_at=time.time(),
             paper_mode=cfg.paper_mode,
         )
