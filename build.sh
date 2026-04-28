@@ -27,8 +27,8 @@ conan profile detect --force || true
 # Fix for macOS apple-clang 21.0 not being in the default conan settings.yml
 sed -i.bak 's/compiler.version=21/compiler.version=15.0/g' ~/.conan2/profiles/default || true
 
-# Clean build directory to avoid cache conflicts
-rm -rf build/CMakeCache.txt build/CMakeFiles trading-core/CMakeUserPresets.json
+# We no longer wipe the CMake cache so that incremental builds are blazing fast!
+# If you ever need a clean build, manually run: rm -rf build/CMakeCache.txt build/CMakeFiles
 
 # Install dependencies using Conan
 echo "==> Installing dependencies via Conan..."

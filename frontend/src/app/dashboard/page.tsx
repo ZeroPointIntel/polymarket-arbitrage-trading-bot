@@ -17,6 +17,7 @@ export default function DashboardPage() {
   const chartRef = useRef<IChartApi | null>(null);
   const lineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const fairValueSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const pmSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -31,16 +32,34 @@ export default function DashboardPage() {
         vertLines: { color: "rgba(255, 255, 255, 0.05)" },
         horzLines: { color: "rgba(255, 255, 255, 0.05)" },
       },
+      rightPriceScale: {
+        visible: true,
+      },
+      leftPriceScale: {
+        visible: true,
+      },
       width: chartContainerRef.current.clientWidth,
       height: 300,
     });
 
     const lineSeries = chart.addSeries(LineSeries, { color: "#38bdf8", lineWidth: 2, title: "BTC Price" });
-    const fairValueSeries = chart.addSeries(LineSeries, { color: "#34d399", lineWidth: 2, title: "Fair Value (0-1)" });
+    const fairValueSeries = chart.addSeries(LineSeries, { 
+      color: "#34d399", 
+      lineWidth: 2, 
+      title: "Fair Value (0-1)",
+      priceScaleId: "left"
+    });
+    const pmSeries = chart.addSeries(LineSeries, { 
+      color: "#f472b6", 
+      lineWidth: 2, 
+      title: "Polymarket YES Price",
+      priceScaleId: "left"
+    });
 
     chartRef.current = chart;
     lineSeriesRef.current = lineSeries;
     fairValueSeriesRef.current = fairValueSeries;
+    pmSeriesRef.current = pmSeries;
 
     const handleResize = () => {
       if (chartContainerRef.current) {
@@ -56,10 +75,11 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (liveState.timestamp && lineSeriesRef.current && fairValueSeriesRef.current) {
+    if (liveState.timestamp && lineSeriesRef.current && fairValueSeriesRef.current && pmSeriesRef.current) {
       const time = (liveState.timestamp / 1000) as any;
       lineSeriesRef.current.update({ time, value: liveState.btcPrice });
-      fairValueSeriesRef.current.update({ time, value: liveState.fairValue * 100000 }); // Scaled for visibility alongside BTC
+      fairValueSeriesRef.current.update({ time, value: liveState.fairValue });
+      pmSeriesRef.current.update({ time, value: liveState.polymarketPrice });
     }
   }, [liveState]);
 

@@ -17,9 +17,10 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   return (
-    <div className="flex h-screen bg-black text-white selection:bg-white/20">
+    <div className="flex h-screen text-white selection:bg-white/20 relative">
+      <div className="mesh-bg" />
       {/* Sidebar */}
-      <div className="w-64 border-r border-white/10 bg-[#0a0a0a] flex flex-col z-20 relative">
+      <div className="w-64 glass flex flex-col z-20 relative border-r-0 border-y-0">
         <div className="flex h-16 items-center px-6 border-b border-white/10">
           <span className="text-xl font-bold tracking-tight">TradeBot Pro</span>
         </div>
@@ -31,10 +32,10 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.name}
                 href={item.href}
-                className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-all ${
+                className={`flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
                   isActive 
-                    ? "bg-white/10 text-white" 
-                    : "text-zinc-400 hover:bg-white/5 hover:text-white"
+                    ? "bg-white/20 text-white shadow-[0_4px_12px_rgba(0,0,0,0.1)]" 
+                    : "text-white/60 hover:bg-white/10 hover:text-white"
                 }`}
               >
                 <Icon className="h-4 w-4" />
@@ -46,7 +47,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
         <div className="p-4 border-t border-white/10">
           <button
             onClick={() => signOut({ callbackUrl: "/login" })}
-            className="flex w-full items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-zinc-400 hover:bg-white/5 hover:text-white transition-all"
+            className="flex w-full items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium text-white/60 hover:bg-white/10 hover:text-white transition-all"
           >
             <LogOut className="h-4 w-4" />
             Sign Out
@@ -55,8 +56,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col overflow-hidden relative z-10 bg-black">
-        <header className="h-16 border-b border-white/10 flex items-center px-8 sticky top-0 z-30 bg-black/80 backdrop-blur-md">
+      <div className="flex-1 flex flex-col overflow-hidden relative z-10">
+        <header className="h-16 flex items-center px-8 sticky top-0 z-30 glass border-t-0 border-x-0 rounded-none">
           <h1 className="text-lg font-semibold text-white">
             {navigation.find((item) => item.href === pathname)?.name || "Dashboard"}
           </h1>

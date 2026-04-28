@@ -33,12 +33,13 @@ export default function LoginPage() {
       router.push("/dashboard");
     }
   };
-
-    <div className="flex items-center justify-center min-h-screen bg-black text-white selection:bg-white/20">
-      <GlassCard className="w-full max-w-md z-10 p-2 shadow-2xl">
+  return (
+    <div className="flex items-center justify-center min-h-screen text-white selection:bg-white/20 relative">
+      <div className="mesh-bg" />
+      <GlassCard className="w-full max-w-md z-10 p-4 shadow-2xl">
         <CardHeader className="space-y-1">
-          <CardTitle className="text-3xl font-bold text-center text-white">TradeBot Pro</CardTitle>
-          <CardDescription className="text-center text-zinc-400">
+          <CardTitle className="text-3xl font-bold text-center text-white drop-shadow-sm">TradeBot Pro</CardTitle>
+          <CardDescription className="text-center text-white/70">
             Enter your email and password to control the Trading Bot
           </CardDescription>
         </CardHeader>
@@ -58,7 +59,7 @@ export default function LoginPage() {
                 required 
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="bg-black/50 border-white/10 text-white focus-visible:ring-primary/50"
+                className="bg-white/5 border-white/10 text-white focus-visible:ring-white/50 rounded-xl"
               />
             </div>
             <div className="space-y-2">
@@ -78,12 +79,12 @@ export default function LoginPage() {
                 required 
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="bg-black/50 border-white/10 text-white focus-visible:ring-primary/50"
+                className="bg-white/5 border-white/10 text-white focus-visible:ring-white/50 rounded-xl"
               />
             </div>
           </CardContent>
           <CardFooter>
-            <Button type="submit" className="w-full bg-white text-black hover:bg-zinc-200 transition-all font-semibold" disabled={loading}>
+            <Button type="submit" className="w-full bg-white/20 hover:bg-white/30 text-white backdrop-blur-md border border-white/20 transition-all font-semibold rounded-xl" disabled={loading}>
               {loading ? "Authenticating..." : "Initialize Session"}
             </Button>
           </CardFooter>

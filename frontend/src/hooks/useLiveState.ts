@@ -7,6 +7,7 @@ export interface LiveState {
   status: number;
   btcPrice: number;
   fairValue: number;
+  polymarketPrice: number;
   timestamp: number;
 }
 
@@ -17,6 +18,7 @@ const defaultState: LiveState = {
   status: 0,
   btcPrice: 0,
   fairValue: 0,
+  polymarketPrice: 0,
   timestamp: 0,
 };
 

@@ -56,6 +56,10 @@ void run_evaluation_loop(boost::asio::steady_timer& timer,
             double btc_price = btc_tick ? btc_tick->price : 0.0;
             state["btcPrice"] = btc_price;
             
+            auto pm_tick = store.get_token_price(active_market.yes_token_id);
+            double pm_price = pm_tick ? pm_tick->price : 0.0;
+            state["polymarketPrice"] = pm_price;
+            
             double seconds_remaining = active_market.end_date_ts - (current_time_ms / 1000.0);
             double fair_value = 0.5;
             if (btc_price > 0 && seconds_remaining > 0) {

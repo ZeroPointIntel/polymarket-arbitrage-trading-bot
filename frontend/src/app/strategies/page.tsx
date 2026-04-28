@@ -44,7 +44,7 @@ export default function StrategiesPage() {
               />
             </div>
             
-            <div className="bg-black/20 p-4 rounded-md border border-white/5">
+            <div className="bg-white/5 p-4 rounded-xl border border-white/10">
               <h4 className="text-sm font-semibold mb-2">Current Parameters (Read-only)</h4>
               <ul className="text-sm space-y-2 text-muted-foreground">
                 <li className="flex justify-between"><span className="text-white">Asset:</span> BTC</li>
@@ -76,7 +76,7 @@ export default function StrategiesPage() {
               />
             </div>
 
-            <div className="bg-black/20 p-4 rounded-md border border-white/5">
+            <div className="bg-white/5 p-4 rounded-xl border border-white/10">
               <h4 className="text-sm font-semibold mb-2">Current Parameters (Read-only)</h4>
               <ul className="text-sm space-y-2 text-muted-foreground">
                 <li className="flex justify-between"><span className="text-white">Sum Target:</span> &lt; 0.95</li>

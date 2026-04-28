@@ -24,7 +24,7 @@ export default function HistoryPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col items-center justify-center p-12 border border-white/5 border-dashed rounded-lg text-muted-foreground bg-black/20">
+            <div className="flex flex-col items-center justify-center p-12 border border-white/5 border-dashed rounded-xl text-white/60 bg-white/5">
               <History className="h-12 w-12 mb-4 opacity-30" />
               <p>No trades executed yet in this session.</p>
             </div>
