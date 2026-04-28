@@ -3,7 +3,7 @@
 import { signIn } from "next-auth/react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { GlassCard, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/shared/GlassCard";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -34,12 +34,11 @@ export default function LoginPage() {
     }
   };
 
-  return (
-    <div className="flex items-center justify-center min-h-screen bg-background">
-      <Card className="w-full max-w-md">
+    <div className="flex items-center justify-center min-h-screen bg-black text-white selection:bg-white/20">
+      <GlassCard className="w-full max-w-md z-10 p-2 shadow-2xl">
         <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold">Sign In</CardTitle>
-          <CardDescription>
+          <CardTitle className="text-3xl font-bold text-center text-white">TradeBot Pro</CardTitle>
+          <CardDescription className="text-center text-zinc-400">
             Enter your email and password to control the Trading Bot
           </CardDescription>
         </CardHeader>
@@ -59,6 +58,7 @@ export default function LoginPage() {
                 required 
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                className="bg-black/50 border-white/10 text-white focus-visible:ring-primary/50"
               />
             </div>
             <div className="space-y-2">
@@ -78,16 +78,17 @@ export default function LoginPage() {
                 required 
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                className="bg-black/50 border-white/10 text-white focus-visible:ring-primary/50"
               />
             </div>
           </CardContent>
           <CardFooter>
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Signing in..." : "Sign In"}
+            <Button type="submit" className="w-full bg-white text-black hover:bg-zinc-200 transition-all font-semibold" disabled={loading}>
+              {loading ? "Authenticating..." : "Initialize Session"}
             </Button>
           </CardFooter>
         </form>
-      </Card>
+      </GlassCard>
     </div>
   );
 }

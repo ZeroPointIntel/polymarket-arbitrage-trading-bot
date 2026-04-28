@@ -1,47 +1,38 @@
+import { WebSocket } from 'ws';
+
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  let counter = 0;
-  
   const stream = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
       
-      const pushState = () => {
-        counter++;
-        
-        // Mock data that fluctuates
-        const baseBalance = 1000.0;
-        const volatility = (Math.random() - 0.5) * 5;
-        const balance = baseBalance + volatility;
-        
-        // Mock BTC price around 98000
-        const btcPrice = 98000 + (Math.random() - 0.5) * 50;
-        const fairValue = btcPrice > 98000 ? 0.6 : 0.4;
-        
-        const state = {
-          balance,
-          winRate: 0.0,
-          openPositions: counter % 10 === 0 ? 1 : 0,
-          status: 0,
-          btcPrice,
-          fairValue,
-          timestamp: Date.now(),
-        };
+      // Connect to the C++ Core's LiveStateServer
+      const ws = new WebSocket('ws://127.0.0.1:8080');
+      
+      ws.on('open', () => {
+        console.log('[SSE] Connected to C++ LiveStateServer');
+      });
 
-        const data = `data: ${JSON.stringify(state)}\n\n`;
-        controller.enqueue(encoder.encode(data));
-      };
+      ws.on('message', (data) => {
+        // Data from C++ is a JSON string. Push it directly to SSE.
+        const payload = `data: ${data.toString()}\n\n`;
+        controller.enqueue(encoder.encode(payload));
+      });
+      
+      ws.on('close', () => {
+        console.log('[SSE] C++ LiveStateServer disconnected');
+        try { controller.close(); } catch (e) {}
+      });
 
-      // Push initial state immediately
-      pushState();
-
-      // Push updates every 50ms to simulate the trading core tick
-      const interval = setInterval(pushState, 50);
+      ws.on('error', (err) => {
+        console.error('[SSE] WebSocket error:', err);
+        try { controller.error(err); } catch (e) {}
+      });
 
       req.signal.addEventListener("abort", () => {
-        clearInterval(interval);
-        controller.close();
+        console.log('[SSE] Client disconnected, closing WS');
+        ws.close();
       });
     },
   });

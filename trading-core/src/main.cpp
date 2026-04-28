@@ -9,6 +9,9 @@
 #include "exec/OrderRouter.h"
 #include "risk/RiskManager.h"
 #include "signals/SignalEngine.h"
+#include "control/LiveStateServer.h"
+#include "model/FairValueModel.h"
+#include <boost/json.hpp>
 #include <fstream>
 #include <map>
 #include <string>
@@ -30,13 +33,41 @@ std::map<std::string, std::string> load_env() {
     return env;
 }
 
-void run_evaluation_loop(boost::asio::steady_timer& timer, trading::SignalEngine& engine) {
+void run_evaluation_loop(boost::asio::steady_timer& timer, 
+                         trading::SignalEngine& engine,
+                         std::shared_ptr<trading::control::LiveStateServer> live_server,
+                         std::shared_ptr<risk::RiskManager> risk_manager,
+                         trading::StateStore& store,
+                         const trading::MarketInfo& active_market) {
     timer.expires_after(std::chrono::milliseconds(50));
-    timer.async_wait([&](const boost::system::error_code& ec) {
+    timer.async_wait([&, live_server, risk_manager, active_market](const boost::system::error_code& ec) {
         if (!ec) {
             double current_time_ms = std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
             engine.tick(current_time_ms);
-            run_evaluation_loop(timer, engine);
+            
+            // Broadcast live state to Next.js
+            boost::json::object state;
+            state["balance"] = risk_manager->get_current_balance();
+            state["winRate"] = risk_manager->get_win_rate();
+            state["openPositions"] = risk_manager->get_open_position_count();
+            state["status"] = static_cast<int>(risk_manager->get_status());
+            
+            auto btc_tick = store.get_latest_btc_price();
+            double btc_price = btc_tick ? btc_tick->price : 0.0;
+            state["btcPrice"] = btc_price;
+            
+            double seconds_remaining = active_market.end_date_ts - (current_time_ms / 1000.0);
+            double fair_value = 0.5;
+            if (btc_price > 0 && seconds_remaining > 0) {
+                fair_value = model::FairValueModel::compute_fair_value_5m(
+                    btc_price, active_market.strike, seconds_remaining, "UP", 150.0, 20.0);
+            }
+            state["fairValue"] = fair_value;
+            state["timestamp"] = current_time_ms;
+            
+            live_server->broadcast_state(boost::json::serialize(state));
+            
+            run_evaluation_loop(timer, engine, live_server, risk_manager, store, active_market);
         }
     });
 }
@@ -125,9 +156,13 @@ int main() {
         // 6. Initialize SignalEngine
         trading::SignalEngine engine(store, risk_manager, router, active_markets);
 
-        // 7. Start the evaluation loop (50ms tick)
+        // 7. Start the Live State WS Server
+        auto live_server = std::make_shared<trading::control::LiveStateServer>(ioc, 8080);
+        live_server->start();
+
+        // 8. Start the evaluation loop (50ms tick)
         boost::asio::steady_timer eval_timer(ioc);
-        run_evaluation_loop(eval_timer, engine);
+        run_evaluation_loop(eval_timer, engine, live_server, risk_manager, store, active_market);
 
         // 8. Start the heartbeat timer (10s)
         boost::asio::steady_timer hb_timer(ioc);

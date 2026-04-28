@@ -44,6 +44,7 @@ set(SOURCES
     src/signals/LatencyArbDetector.cpp
     src/signals/DumpHedgeDetector.cpp
     src/signals/SignalEngine.cpp
+    src/control/LiveStateServer.cpp
 )
 
 add_executable(trading-core ${SOURCES})
