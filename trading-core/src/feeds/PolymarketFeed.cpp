@@ -185,34 +185,81 @@ void PolymarketFeed::process_message(std::string_view msg) {
     try {
         boost::json::value jv = boost::json::parse(msg);
         
-        // Polymarket can send an array or a single object. We handle array of events.
-        if (jv.is_array()) {
-            for (const auto& item_val : jv.as_array()) {
-                if (!item_val.is_object()) continue;
-                const auto& item = item_val.as_object();
-                
-                if (item.contains("event_type") && item.at("event_type").is_string()) {
-                    auto event_type = item.at("event_type").as_string();
-                    if (event_type == "price_change") {
-                        if (item.contains("asset_id") && item.contains("price") && item.contains("side")) {
-                            std::string asset_id(item.at("asset_id").as_string());
-                            std::string price_str(item.at("price").as_string());
-                            std::string side(item.at("side").as_string());
-                            
-                            TokenPrice tp;
-                            tp.price = std::stod(price_str);
-                            
-                            // Inverse the side relative to the Maker
-                            tp.side = (side == "BUY") ? "SELL" : "BUY";
-                            
-                            auto now = std::chrono::system_clock::now();
-                            tp.ts = std::chrono::duration<double>(now.time_since_epoch()).count();
-                            
-                            store_.update_token_price(asset_id, tp);
+        auto process_item = [&](const boost::json::object& item) {
+            if (!item.contains("event_type") || !item.at("event_type").is_string()) return;
+            auto event_type = item.at("event_type").as_string();
+            
+            if (event_type == "price_change") {
+                if (item.contains("asset_id") && item.contains("price") && item.contains("side")) {
+                    std::string asset_id(item.at("asset_id").as_string());
+                    std::string price_str(item.at("price").as_string());
+                    std::string side(item.at("side").as_string());
+                    
+                    TokenPrice tp;
+                    tp.price = std::stod(price_str);
+                    
+                    // Inverse the side relative to the Maker
+                    tp.side = (side == "BUY") ? "SELL" : "BUY";
+                    
+                    auto now = std::chrono::system_clock::now();
+                    tp.ts = std::chrono::duration<double>(now.time_since_epoch()).count();
+                    
+                    std::string key = asset_id;
+                    if (tp.side == "SELL") {
+                        key = asset_id + "_bid";
+                    }
+                    store_.update_token_price(key, tp);
+                }
+            } else if (event_type == "book") {
+                if (item.contains("asset_id")) {
+                    std::string asset_id(item.at("asset_id").as_string());
+                    auto now = std::chrono::system_clock::now();
+                    double ts = std::chrono::duration<double>(now.time_since_epoch()).count();
+                    
+                    if (item.contains("bids") && item.at("bids").is_array()) {
+                        auto bids = item.at("bids").as_array();
+                        if (!bids.empty()) {
+                            double best_bid = 0.0;
+                            for (const auto& b : bids) {
+                                if (b.is_object() && b.as_object().contains("price")) {
+                                    double p = std::stod(b.as_object().at("price").as_string().c_str());
+                                    if (p > best_bid) best_bid = p;
+                                }
+                            }
+                            if (best_bid > 0.0) {
+                                TokenPrice tp{best_bid, "SELL", ts};
+                                store_.update_token_price(asset_id + "_bid", tp);
+                            }
+                        }
+                    }
+                    if (item.contains("asks") && item.at("asks").is_array()) {
+                        auto asks = item.at("asks").as_array();
+                        if (!asks.empty()) {
+                            double best_ask = 1.0;
+                            for (const auto& a : asks) {
+                                if (a.is_object() && a.as_object().contains("price")) {
+                                    double p = std::stod(a.as_object().at("price").as_string().c_str());
+                                    if (p < best_ask) best_ask = p;
+                                }
+                            }
+                            if (best_ask < 1.0) {
+                                TokenPrice tp{best_ask, "BUY", ts};
+                                store_.update_token_price(asset_id, tp);
+                            }
                         }
                     }
                 }
             }
+        };
+
+        if (jv.is_array()) {
+            for (const auto& item_val : jv.as_array()) {
+                if (item_val.is_object()) {
+                    process_item(item_val.as_object());
+                }
+            }
+        } else if (jv.is_object()) {
+            process_item(jv.as_object());
         }
     } catch (const boost::json::system_error& e) {
         // Not a big deal, could be a ping response or other non-json message

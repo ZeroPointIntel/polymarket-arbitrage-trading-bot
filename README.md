@@ -23,6 +23,17 @@ This project strictly adheres to a **3-tier architecture**, explicitly segregati
    - **State:** Zustand (global), TanStack Query (server state).
    - **Real-time:** Receives live state (PnL, current edge, system health) from the gateway via Server-Sent Events (SSE).
 
+## Authentication
+
+By default, the dashboard is protected. An initial super user is seeded into the database for local development.
+
+- **Email:** `admin@tradebot.local`
+- **Password:** `SuperSecretPassword123!`
+
+> [!NOTE]
+> If you need to change these default credentials, update them in `frontend/prisma/seed.ts` and re-run `npx prisma db seed` from the `frontend` directory.
+
+
 ## Building the C++ Core
 
 The C++ core is designed to be cross-platform for development but optimized for Linux in production. It uses `CMake` and `Conan` for dependency management. It builds directly into the `build/` directory at the repository root.
