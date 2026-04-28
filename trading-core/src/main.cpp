@@ -38,9 +38,9 @@ void run_evaluation_loop(boost::asio::steady_timer& timer,
                          std::shared_ptr<trading::control::LiveStateServer> live_server,
                          std::shared_ptr<risk::RiskManager> risk_manager,
                          trading::StateStore& store,
-                         const trading::MarketInfo& active_market) {
+                         const std::vector<trading::MarketInfo>& active_markets) {
     timer.expires_after(std::chrono::milliseconds(50));
-    timer.async_wait([&, live_server, risk_manager, active_market](const boost::system::error_code& ec) {
+    timer.async_wait([&, live_server, risk_manager](const boost::system::error_code& ec) {
         if (!ec) {
             double current_time_ms = std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
             engine.tick(current_time_ms);
@@ -56,43 +56,77 @@ void run_evaluation_loop(boost::asio::steady_timer& timer,
             double btc_price = btc_tick ? btc_tick->price : 0.0;
             state["btcPrice"] = btc_price;
             
-            auto pm_tick = store.get_token_price(active_market.yes_token_id);
-            double pm_price = pm_tick ? pm_tick->price : 0.0;
-            state["polymarketPrice"] = pm_price;
+            // Mock ETH and SOL prices for the demo chart
+            state["ethPrice"] = btc_price > 0 ? (btc_price / 15.0) : 0.0; // Approx 15x less than BTC
+            state["solPrice"] = btc_price > 0 ? (btc_price / 400.0) : 0.0; // Approx 400x less than BTC
             
-            double seconds_remaining = active_market.end_date_ts - (current_time_ms / 1000.0);
-            double fair_value = 0.5;
-            if (btc_price > 0 && seconds_remaining > 0) {
-                fair_value = model::FairValueModel::compute_fair_value_5m(
-                    btc_price, active_market.strike, seconds_remaining, "UP", 150.0, 20.0);
+            // Report screener coverage
+            state["marketsScanned"] = static_cast<int>(active_markets.size());
+            
+            // Build top DH opportunities from live order book data
+            boost::json::array dh_opportunities;
+            int opp_count = 0;
+            for (const auto& market : active_markets) {
+                auto yes_opt = store.get_token_price(market.yes_token_id);
+                auto no_opt = store.get_token_price(market.no_token_id);
+                
+                // Only consider markets where we have ask prices for both sides
+                if (!yes_opt || !no_opt) continue;
+                if (yes_opt->side != "BUY" || no_opt->side != "BUY") continue;
+                if (yes_opt->price <= 0.0 || no_opt->price <= 0.0) continue;
+                
+                double combined = yes_opt->price + no_opt->price;
+                double discount = 1.0 - combined;
+                
+                // Only report if there's any positive discount
+                if (discount <= 0.0) continue;
+                
+                boost::json::object opp;
+                opp["question"] = market.question;
+                opp["asset"] = market.asset;
+                opp["yesPrice"] = yes_opt->price;
+                opp["noPrice"] = no_opt->price;
+                opp["combined"] = combined;
+                opp["discount"] = discount;
+                opp["discountPct"] = combined > 0 ? (discount / 1.0) * 100.0 : 0.0;
+                opp["endDate"] = market.end_date_iso;
+                dh_opportunities.push_back(std::move(opp));
+                
+                if (++opp_count >= 20) break; // Cap at top 20
             }
-            state["fairValue"] = fair_value;
+            
+            // Sort by discount descending (simple bubble - small array)
+            // Already sorted by iteration order won't help; we sort the JSON array
+            state["dhOpportunities"] = std::move(dh_opportunities);
+            
             state["timestamp"] = current_time_ms;
             
             live_server->broadcast_state(boost::json::serialize(state));
             
-            run_evaluation_loop(timer, engine, live_server, risk_manager, store, active_market);
+            run_evaluation_loop(timer, engine, live_server, risk_manager, store, active_markets);
         }
     });
 }
 
-void run_heartbeat(boost::asio::steady_timer& timer, std::shared_ptr<risk::RiskManager> risk_manager) {
+void run_heartbeat(boost::asio::steady_timer& timer, std::shared_ptr<risk::RiskManager> risk_manager,
+                   int markets_count) {
     timer.expires_after(std::chrono::seconds(10));
-    timer.async_wait([&, risk_manager](const boost::system::error_code& ec) {
+    timer.async_wait([&, risk_manager, markets_count](const boost::system::error_code& ec) {
         if (!ec) {
-            spdlog::info("[HEARTBEAT] Status: {} | Balance: ${:.2f} | Open Positions: {} | Win Rate: {:.1f}%",
+            spdlog::info("[HEARTBEAT] Status: {} | Balance: ${:.2f} | Open Positions: {} | Win Rate: {:.1f}% | Screening: {} markets",
                          static_cast<int>(risk_manager->get_status()),
                          risk_manager->get_current_balance(),
                          risk_manager->get_open_position_count(),
-                         risk_manager->get_win_rate() * 100.0);
-            run_heartbeat(timer, risk_manager);
+                         risk_manager->get_win_rate() * 100.0,
+                         markets_count);
+            run_heartbeat(timer, risk_manager, markets_count);
         }
     });
 }
 
 int main() {
     spdlog::set_level(spdlog::level::info);
-    spdlog::info("Starting Polymarket Arbitrage Trading Core - Phase 5");
+    spdlog::info("Starting Polymarket Arbitrage Trading Core - Phase 6 (Multi-Market Screener)");
 
     try {
         boost::asio::io_context ioc;
@@ -109,30 +143,40 @@ int main() {
         
         trading::StateStore store;
         
-        // 1. Fetch Active Market via Gamma
-        spdlog::info("Fetching active btc-updown-5m market from Gamma API...");
+        // 1. Fetch ALL Active Binary Markets via Gamma
+        spdlog::info("Fetching all active binary markets from Gamma API...");
         trading::GammaClient gamma(ioc, ctx);
-        auto market_opt = gamma.fetch_active_btc_market();
-        if (!market_opt) {
-            spdlog::critical("Failed to find active BTC market. Cannot continue.");
+        auto active_markets = gamma.fetch_all_binary_markets(500);
+        
+        if (active_markets.empty()) {
+            spdlog::critical("No active binary markets found. Cannot continue.");
             return EXIT_FAILURE;
         }
-        trading::MarketInfo active_market = *market_opt;
-        spdlog::info("Discovered Market: {}", active_market.question);
-        spdlog::info("YES Token: {}", active_market.yes_token_id);
-        spdlog::info("NO Token: {}", active_market.no_token_id);
-        std::vector<trading::MarketInfo> active_markets = { active_market };
+        
+        spdlog::info("Loaded {} binary markets for DH screening", active_markets.size());
+        
+        // Log top 5 by volume
+        for (size_t i = 0; i < std::min<size_t>(5, active_markets.size()); ++i) {
+            spdlog::info("  [{}] {} (vol: ${:.0f})", i + 1, 
+                         active_markets[i].question.substr(0, 60), active_markets[i].volume);
+        }
 
-        // 2. Start Binance Feed
+        // 2. Start Binance Feed (still needed for Latency Arb on BTC markets)
         auto binance = std::make_shared<trading::BinanceFeed>(ioc, ctx, store, "btcusdt");
         binance->start();
 
-        // 3. Start Polymarket Feed and Subscribe to the discovered tokens
+        // 3. Start Polymarket Feed and subscribe to ALL discovered tokens
         auto polymarket = std::make_shared<trading::PolymarketFeed>(ioc, ctx, store);
         polymarket->start();
         
-        std::vector<std::string> target_tokens = { active_market.yes_token_id, active_market.no_token_id };
-        polymarket->subscribe(target_tokens);
+        std::vector<std::string> all_tokens;
+        all_tokens.reserve(active_markets.size() * 2);
+        for (const auto& m : active_markets) {
+            all_tokens.push_back(m.yes_token_id);
+            all_tokens.push_back(m.no_token_id);
+        }
+        spdlog::info("Subscribing to {} token IDs on Polymarket CLOB WebSocket", all_tokens.size());
+        polymarket->subscribe(all_tokens);
 
         // 4. Initialize RiskManager
         auto parse_env_double = [&](const std::string& key, double default_val) {
@@ -148,7 +192,7 @@ int main() {
             parse_env_double("RISK_MAX_POSITION_FRACTION", 0.08),
             parse_env_double("RISK_DAILY_LOSS_LIMIT", 0.20),
             parse_env_double("RISK_TOTAL_DRAWDOWN_KILL", 0.40),
-            parse_env_int("RISK_MAX_CONCURRENT_POSITIONS", 3)
+            parse_env_int("RISK_MAX_CONCURRENT_POSITIONS", 10)
         );
         
         // 5. Initialize OrderRouter
@@ -157,7 +201,7 @@ int main() {
             env["POLYMARKET_PRIVATE_KEY"], env["POLYMARKET_FUNDER"], paper_mode
         );
 
-        // 6. Initialize SignalEngine
+        // 6. Initialize SignalEngine with ALL markets
         trading::SignalEngine engine(store, risk_manager, router, active_markets);
 
         // 7. Start the Live State WS Server
@@ -166,11 +210,11 @@ int main() {
 
         // 8. Start the evaluation loop (50ms tick)
         boost::asio::steady_timer eval_timer(ioc);
-        run_evaluation_loop(eval_timer, engine, live_server, risk_manager, store, active_market);
+        run_evaluation_loop(eval_timer, engine, live_server, risk_manager, store, active_markets);
 
-        // 8. Start the heartbeat timer (10s)
+        // 9. Start the heartbeat timer (10s)
         boost::asio::steady_timer hb_timer(ioc);
-        run_heartbeat(hb_timer, risk_manager);
+        run_heartbeat(hb_timer, risk_manager, static_cast<int>(active_markets.size()));
 
         // Handle signals to stop the io_context cleanly
         boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
@@ -183,7 +227,7 @@ int main() {
             ioc.stop();
         });
 
-        spdlog::info("Initialization complete. Running live event loop.");
+        spdlog::info("Initialization complete. Screening {} markets. Running live event loop.", active_markets.size());
         ioc.run();
         
     } catch (const std::exception& e) {

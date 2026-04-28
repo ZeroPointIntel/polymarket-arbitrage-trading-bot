@@ -18,6 +18,8 @@ public:
 
     // Call this periodically or on feed updates
     void tick(double current_time_ms);
+    
+    void update_dh_params(double sum_target, double min_discount);
 
 private:
     void handle_latency_signal(const LatencyArbSignal& sig);

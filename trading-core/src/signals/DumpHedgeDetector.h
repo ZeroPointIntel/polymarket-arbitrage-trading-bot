@@ -12,13 +12,16 @@ class DumpHedgeDetector {
 public:
     DumpHedgeDetector(StateStore& state_store, 
                       std::vector<MarketInfo> active_markets,
-                      double sum_target = 0.95,
-                      double min_discount = 0.03,
+                      double sum_target = 0.99,
+                      double min_discount = 0.01,
                       double min_seconds_remaining = 60.0,
                       double cooldown_seconds = 30.0);
 
     std::optional<DumpHedgeSignal> evaluate(double current_time_ms);
     void reset_cooldown(const std::string& asset, double current_time_ms);
+    
+    void set_sum_target(double val) { sum_target_ = val; }
+    void set_min_discount(double val) { min_discount_ = val; }
 
 private:
     StateStore& state_store_;

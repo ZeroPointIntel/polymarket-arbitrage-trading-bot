@@ -11,7 +11,7 @@ import { useState } from "react";
 
 export default function StrategiesPage() {
   const [latencyArbEnabled, setLatencyArbEnabled] = useState(true);
-  const [dumpHedgeEnabled, setDumpHedgeEnabled] = useState(false);
+  const [dumpHedgeEnabled, setDumpHedgeEnabled] = useState(true);
 
   return (
     <DashboardLayout>
@@ -24,16 +24,16 @@ export default function StrategiesPage() {
 
         <GlassCard>
           <CardHeader>
-            <CardTitle className="text-primary">Latency Arbitrage Detector</CardTitle>
-            <CardDescription>
+            <CardTitle className="font-heading text-lg font-semibold tracking-tight text-gradient">Latency Arbitrage Detector</CardTitle>
+            <CardDescription className="text-white/40 text-[13px] leading-relaxed">
               Exploits pricing delays between Binance (BTC tick) and Polymarket Order Book.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <Label htmlFor="latency-arb" className="flex flex-col space-y-1">
-                <span className="font-semibold">Enable Detector</span>
-                <span className="font-normal text-muted-foreground text-xs">
+                <span className="font-semibold text-white/90 text-[14px]">Enable Detector</span>
+                <span className="font-normal text-white/40 text-[12px] tracking-wide">
                   Runs evaluation every 50ms inside the execution loop.
                 </span>
               </Label>
@@ -45,10 +45,16 @@ export default function StrategiesPage() {
             </div>
             
             <div className="bg-white/5 p-4 rounded-xl border border-white/10">
-              <h4 className="text-sm font-semibold mb-2">Current Parameters (Read-only)</h4>
-              <ul className="text-sm space-y-2 text-muted-foreground">
-                <li className="flex justify-between"><span className="text-white">Asset:</span> BTC</li>
-                <li className="flex justify-between"><span className="text-white">Minimum Edge:</span> 0.040 (4 cents)</li>
+              <h4 className="text-[11px] font-medium tracking-widest uppercase text-white/40 mb-3">Current Parameters</h4>
+              <ul className="text-[13px] space-y-2.5">
+                <li className="flex justify-between">
+                  <span className="text-white/50">Asset</span>
+                  <span className="font-mono text-white/90">BTC</span>
+                </li>
+                <li className="flex justify-between">
+                  <span className="text-white/50">Minimum Edge</span>
+                  <span className="font-mono text-white/90">0.040</span>
+                </li>
               </ul>
             </div>
           </CardContent>
@@ -56,16 +62,16 @@ export default function StrategiesPage() {
 
         <GlassCard>
           <CardHeader>
-            <CardTitle className="text-primary">Dump-Hedge Detector</CardTitle>
-            <CardDescription>
+            <CardTitle className="font-heading text-lg font-semibold tracking-tight text-gradient">Dump-Hedge Detector</CardTitle>
+            <CardDescription className="text-white/40 text-[13px] leading-relaxed">
               Scans for order book illiquidity causing a combined Yes+No discount below 1.0.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <Label htmlFor="dump-hedge" className="flex flex-col space-y-1">
-                <span className="font-semibold">Enable Detector</span>
-                <span className="font-normal text-muted-foreground text-xs">
+                <span className="font-semibold text-white/90 text-[14px]">Enable Detector</span>
+                <span className="font-normal text-white/40 text-[12px] tracking-wide">
                   Searches for structural arbitrage opportunities inside the order book.
                 </span>
               </Label>
@@ -77,10 +83,16 @@ export default function StrategiesPage() {
             </div>
 
             <div className="bg-white/5 p-4 rounded-xl border border-white/10">
-              <h4 className="text-sm font-semibold mb-2">Current Parameters (Read-only)</h4>
-              <ul className="text-sm space-y-2 text-muted-foreground">
-                <li className="flex justify-between"><span className="text-white">Sum Target:</span> &lt; 0.95</li>
-                <li className="flex justify-between"><span className="text-white">Minimum Discount:</span> 0.03</li>
+              <h4 className="text-[11px] font-medium tracking-widest uppercase text-white/40 mb-3">Current Parameters</h4>
+              <ul className="text-[13px] space-y-2.5">
+                <li className="flex justify-between">
+                  <span className="text-white/50">Sum Target</span>
+                  <span className="font-mono text-white/90">&lt; 0.95</span>
+                </li>
+                <li className="flex justify-between">
+                  <span className="text-white/50">Minimum Discount</span>
+                  <span className="font-mono text-white/90">0.03</span>
+                </li>
               </ul>
             </div>
           </CardContent>

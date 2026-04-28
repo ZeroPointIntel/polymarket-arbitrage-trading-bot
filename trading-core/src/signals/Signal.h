@@ -11,6 +11,8 @@ struct MarketInfo {
     std::string no_token_id;
     double strike;
     double end_date_ts; // UNIX timestamp in seconds
+    std::string end_date_iso; // ISO-8601 string for display
+    double volume = 0.0; // 24h volume in USD for sorting
 };
 
 struct DumpHedgeSignal {

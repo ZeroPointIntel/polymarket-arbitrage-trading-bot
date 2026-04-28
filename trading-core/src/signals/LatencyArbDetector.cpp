@@ -35,6 +35,9 @@ std::optional<LatencyArbSignal> LatencyArbDetector::evaluate(double current_time
     double btc_price = btc_tick->price;
 
     for (const auto& market : active_markets_) {
+        // Only evaluate LA for the configured asset (e.g. btc)
+        if (market.asset != asset_) continue;
+
         // Check cooldown
         if (last_signal_time_.contains(market.asset)) {
             if ((current_time_ms - last_signal_time_[market.asset]) / 1000.0 < cooldown_seconds_) {

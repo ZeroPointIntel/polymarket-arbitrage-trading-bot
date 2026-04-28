@@ -84,8 +84,13 @@ export default function LoginPage() {
             </div>
           </CardContent>
           <CardFooter>
-            <Button type="submit" className="w-full bg-white/20 hover:bg-white/30 text-white backdrop-blur-md border border-white/20 transition-all font-semibold rounded-xl" disabled={loading}>
-              {loading ? "Authenticating..." : "Initialize Session"}
+            <Button 
+              type="submit" 
+              variant="glass"
+              className="w-full h-12 font-extrabold tracking-tight rounded-2xl text-lg" 
+              disabled={loading}
+            >
+              {loading ? "AUTHENTICATING..." : "INITIALIZE SESSION"}
             </Button>
           </CardFooter>
         </form>

@@ -18,15 +18,15 @@ export default function AuditPage() {
 
         <GlassCard>
           <CardHeader>
-            <CardTitle>System Events</CardTitle>
-            <CardDescription>
+            <CardTitle className="font-heading text-lg font-semibold tracking-tight text-gradient">System Events</CardTitle>
+            <CardDescription className="text-white/40 text-[13px] leading-relaxed">
               A table of authenticated system modifications will appear here.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col items-center justify-center p-12 border border-white/5 border-dashed rounded-xl text-white/60 bg-white/5">
-              <FileText className="h-12 w-12 mb-4 opacity-30" />
-              <p>No audit events recorded yet.</p>
+            <div className="flex flex-col items-center justify-center p-16 border border-white/5 border-dashed rounded-2xl text-white/40 bg-white/[0.02]">
+              <FileText className="h-12 w-12 mb-4 opacity-20" />
+              <p className="text-[13px] tracking-wide">No audit events recorded yet.</p>
             </div>
           </CardContent>
         </GlassCard>
