@@ -1,36 +1,14 @@
-# Environment variables — NEVER commit this file
-.env
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
+# Build outputs
 build/
-dist/
-*.egg-info/
-.eggs/
+trading-core/build/
 
-# Virtual environments
-venv/
-env/
+# Python Virtual Environment
 .venv/
+venv/
+__pycache__/
 
-# Logs
-*.log
-polymarket_bot.log*
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
+# OS files
 .DS_Store
-Thumbs.db
-# Local planning docs
-ROADMAP.md
-trades/
-scratch/
+
+# Secrets
+.env
