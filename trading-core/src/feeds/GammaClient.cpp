@@ -41,20 +41,27 @@ std::optional<double> GammaClient::fetch_token_price(const std::string& token_id
 }
 
 std::string GammaClient::http_get(const std::string& host, const std::string& target) {
+    std::lock_guard<std::mutex> lock(http_mutex_);
     boost::asio::ip::tcp::resolver resolver(ioc_);
     boost::asio::ssl::stream<beast::tcp_stream> stream(ioc_, ctx_);
     SSL_set_tlsext_host_name(stream.native_handle(), host.c_str());
+    beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
     auto const results = resolver.resolve(host, "443");
     beast::get_lowest_layer(stream).connect(results);
+    
+    beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
     stream.handshake(boost::asio::ssl::stream_base::client);
 
     http::request<http::string_body> req{http::verb::get, target, 11};
     req.set(http::field::host, host);
     req.set(http::field::user_agent, "Mozilla/5.0");
+    
+    beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
     http::write(stream, req);
 
     beast::flat_buffer buffer;
     http::response<http::string_body> res;
+    beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
     http::read(stream, buffer, res);
     beast::error_code ec;
     stream.shutdown(ec);

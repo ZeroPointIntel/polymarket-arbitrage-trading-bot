@@ -20,6 +20,7 @@
 #include "exec/OrderRouter.h"
 #include <spdlog/sinks/basic_file_sink.h>
 #include <fmt/core.h>
+#include <atomic>
 
 using namespace trading;
 
@@ -28,8 +29,10 @@ struct ExitConfig {
     double near_loss_price = 0.08;
     double take_profit_price = 0.72;
     double take_profit_pnl = 0.12;
-    double stop_loss_pnl = -0.20;
+    double stop_loss_pnl = -0.10;
     double position_timeout_seconds = 270.0; // 4.5 minutes
+    double trailing_stop_activation = 0.06;
+    double trailing_stop_distance = 0.04;
 };
 
 std::unordered_map<std::string, std::string> load_env(const std::string& filepath) {
@@ -72,24 +75,33 @@ void check_and_close_positions(risk::RiskManager& risk_manager, StateStore& stor
         double current_pnl_pct = (p.entry_price > 0) ? (current_price - p.entry_price) / p.entry_price : 0.0;
         double age = now - p.opened_at;
 
+        // Update peak price
+        if (current_price > p.peak_price) p.peak_price = current_price;
+        
+        double peak_pnl_pct = (p.entry_price > 0) ? (p.peak_price - p.entry_price) / p.entry_price : 0.0;
+        double drawdown_from_peak = (p.peak_price > 0) ? (p.peak_price - current_price) / p.peak_price : 0.0;
+
         bool should_exit = false;
         std::string exit_reason = "";
 
         if (now >= p.end_date_ts) {
             should_exit = true;
             exit_reason = "EXPIRED";
+        } else if (cfg.stop_loss_pnl < 0 && current_pnl_pct <= cfg.stop_loss_pnl) {
+            should_exit = true;
+            exit_reason = fmt::format("Stop loss: {:.1f}%", current_pnl_pct * 100.0);
+        } else if (peak_pnl_pct >= cfg.trailing_stop_activation && drawdown_from_peak >= cfg.trailing_stop_distance) {
+            should_exit = true;
+            exit_reason = fmt::format("Trailing stop: peak {:.3f} -> {:.3f} (-{:.1f}%)", p.peak_price, current_price, drawdown_from_peak * 100.0);
         } else if (current_price >= cfg.near_win_price) {
             should_exit = true;
             exit_reason = fmt::format("Near resolution win: {:.3f}", current_price);
         } else if (current_price <= cfg.near_loss_price && current_price > 0) {
             should_exit = true;
             exit_reason = fmt::format("Near resolution loss: {:.3f}", current_price);
-        } else if (current_price >= cfg.take_profit_price || current_pnl_pct >= cfg.take_profit_pnl) {
+        } else if ((current_price >= cfg.take_profit_price && current_pnl_pct > 0) || current_pnl_pct >= cfg.take_profit_pnl) {
             should_exit = true;
             exit_reason = fmt::format("Take profit: {:.1f}%", current_pnl_pct * 100.0);
-        } else if (cfg.stop_loss_pnl < 0 && current_pnl_pct <= cfg.stop_loss_pnl) {
-            should_exit = true;
-            exit_reason = fmt::format("Stop loss: {:.1f}%", current_pnl_pct * 100.0);
         } else if (age >= cfg.position_timeout_seconds) {
             should_exit = true;
             exit_reason = fmt::format("Timeout: {:.0f}s", age);
@@ -161,6 +173,8 @@ int main() {
         if (env.count("TAKE_PROFIT_PNL")) exit_cfg.take_profit_pnl = std::stod(env["TAKE_PROFIT_PNL"]);
         if (env.count("STOP_LOSS_PNL")) exit_cfg.stop_loss_pnl = std::stod(env["STOP_LOSS_PNL"]);
         if (env.count("POSITION_TIMEOUT_SECONDS")) exit_cfg.position_timeout_seconds = std::stod(env["POSITION_TIMEOUT_SECONDS"]);
+        if (env.count("TRAILING_STOP_ACTIVATION")) exit_cfg.trailing_stop_activation = std::stod(env["TRAILING_STOP_ACTIVATION"]);
+        if (env.count("TRAILING_STOP_DISTANCE")) exit_cfg.trailing_stop_distance = std::stod(env["TRAILING_STOP_DISTANCE"]);
 
         spdlog::info("Starting Core v2.2 | Mode: {} | Bal: ${:.2f}", paper_mode ? "PAPER" : "LIVE", starting_balance);
 
@@ -189,6 +203,8 @@ int main() {
         auto feed_work = boost::asio::make_work_guard(feed_ioc);
         std::thread feed_thread([&feed_ioc]() { feed_ioc.run(); });
 
+        std::mutex detector_mutex;
+
         std::vector<std::unique_ptr<LatencyArbDetector>> la_detectors;
         auto price_resolver = [&gamma](const std::string& token_id, const std::string& side) { return gamma.fetch_token_price(token_id, side); };
         la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, 0.02, 60.0, 15.0, 2.7, "btc", price_resolver));
@@ -197,6 +213,7 @@ int main() {
 
         std::unique_ptr<DumpHedgeDetector> dh_detector;
         auto eval_la_for_asset = [&](const std::string& sym) {
+            std::lock_guard<std::mutex> lock(detector_mutex);
             double now_ms = std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
             for (auto& det : la_detectors) {
                 auto signal = det->evaluate(now_ms);
@@ -221,6 +238,7 @@ int main() {
         sol_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
 
         poly_feed->set_tick_callback([&](const std::string& token_id) {
+            std::lock_guard<std::mutex> lock(detector_mutex);
             double now_ms = std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
             if (dh_detector) {
                 auto signal = dh_detector->evaluate(now_ms);
@@ -247,23 +265,33 @@ int main() {
         sol_feed->start();
         poly_feed->start();
 
+        std::atomic<bool> is_refreshing{false};
         auto refresh_markets = [&]() {
-            gamma_ioc.restart();
-            std::vector<MarketInfo> all_m;
-            auto b = gamma.fetch_updown_markets("btc");
-            auto e = gamma.fetch_updown_markets("eth");
-            auto s = gamma.fetch_updown_markets("sol");
-            all_m.insert(all_m.end(), b.begin(), b.end());
-            all_m.insert(all_m.end(), e.begin(), e.end());
-            all_m.insert(all_m.end(), s.begin(), s.end());
-            store.update_markets(all_m);
-            for (auto& det : la_detectors) { det->set_active_markets(all_m); det->set_entry_price_range(0.10, 0.90); }
-            dh_detector = std::make_unique<DumpHedgeDetector>(store, all_m, 0.93, 0.02, 60.0, 30.0);
-            std::vector<std::string> tokens;
-            for (const auto& m : all_m) { tokens.push_back(m.yes_token_id); tokens.push_back(m.no_token_id); }
-            if (!tokens.empty()) poly_feed->subscribe(tokens);
-            store.push_telemetry(fmt::format("MARKETS REFRESHED | {} markets | {} tokens",
-                all_m.size(), tokens.size()));
+            if (is_refreshing.exchange(true)) return;
+            try {
+                gamma_ioc.restart();
+                std::vector<MarketInfo> all_m;
+                auto b = gamma.fetch_updown_markets("btc");
+                auto e = gamma.fetch_updown_markets("eth");
+                auto s = gamma.fetch_updown_markets("sol");
+                all_m.insert(all_m.end(), b.begin(), b.end());
+                all_m.insert(all_m.end(), e.begin(), e.end());
+                all_m.insert(all_m.end(), s.begin(), s.end());
+                store.update_markets(all_m);
+                {
+                    std::lock_guard<std::mutex> lock(detector_mutex);
+                    for (auto& det : la_detectors) { det->set_active_markets(all_m); det->set_entry_price_range(0.10, 0.90); }
+                    dh_detector = std::make_unique<DumpHedgeDetector>(store, all_m, 0.93, 0.02, 60.0, 30.0);
+                }
+                std::vector<std::string> tokens;
+                for (const auto& m : all_m) { tokens.push_back(m.yes_token_id); tokens.push_back(m.no_token_id); }
+                if (!tokens.empty()) poly_feed->subscribe(tokens);
+                store.push_telemetry(fmt::format("MARKETS REFRESHED | {} markets | {} tokens",
+                    all_m.size(), tokens.size()));
+            } catch (const std::exception& e) {
+                spdlog::error("Refresh markets failed: {}", e.what());
+            }
+            is_refreshing = false;
         };
 
         refresh_markets();

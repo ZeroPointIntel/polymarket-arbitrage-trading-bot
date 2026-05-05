@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <mutex>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 #include "../signals/Signal.h"
@@ -24,6 +25,7 @@ private:
 
     boost::asio::io_context& ioc_;
     boost::asio::ssl::context& ctx_;
+    std::mutex http_mutex_;
 };
 
 } // namespace trading

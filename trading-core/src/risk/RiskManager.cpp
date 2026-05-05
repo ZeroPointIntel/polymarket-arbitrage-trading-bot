@@ -146,12 +146,12 @@ const std::unordered_map<std::string, double>& RiskManager::get_asset_pnl() cons
     return asset_pnl_;
 }
 
-const std::unordered_map<std::string, Position>& RiskManager::get_open_positions() const {
+std::unordered_map<std::string, Position> RiskManager::get_open_positions() const {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     return open_positions_;
 }
 
-const std::unordered_map<std::string, DumpHedgePosition>& RiskManager::get_open_dh_positions() const {
+std::unordered_map<std::string, DumpHedgePosition> RiskManager::get_open_dh_positions() const {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     return open_dh_positions_;
 }

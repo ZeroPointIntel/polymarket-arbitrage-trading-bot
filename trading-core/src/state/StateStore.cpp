@@ -207,20 +207,24 @@ std::string StateStore::get_dashboard_json() const {
 
     boost::json::array opps;
     { 
-        std::shared_lock lock(market_mutex_); 
-        std::shared_lock t_lock(token_mutex_);
-        for (const auto& m : markets_) {
+        std::vector<MarketInfo> markets_snapshot;
+        { std::shared_lock lock(market_mutex_); markets_snapshot = markets_; }
+        
+        std::unordered_map<std::string, TokenPrice> tokens_snapshot;
+        { std::shared_lock lock(token_mutex_); tokens_snapshot = token_prices_; }
+        
+        for (const auto& m : markets_snapshot) {
             boost::json::object mo;
             mo["asset"] = m.asset.c_str();
             mo["question"] = m.question.c_str();
-            auto it_y = token_prices_.find(m.yes_token_id);
-            auto it_n = token_prices_.find(m.no_token_id);
+            auto it_y = tokens_snapshot.find(m.yes_token_id);
+            auto it_n = tokens_snapshot.find(m.no_token_id);
             double yes = 0.0;
             double no = 0.0;
             double combined = 1.0;
             double discountPct = 0.0;
 
-            if (it_y != token_prices_.end() && it_n != token_prices_.end()) {
+            if (it_y != tokens_snapshot.end() && it_n != tokens_snapshot.end()) {
                 yes = it_y->second.price;
                 no = it_n->second.price;
                 combined = yes + no;

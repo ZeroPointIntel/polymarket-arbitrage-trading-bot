@@ -36,6 +36,7 @@ struct Position {
     std::optional<double> exit_price;
     std::optional<double> pnl_usdc;
     bool paper_mode = true;
+    double peak_price = 0.0;
 };
 
 struct DumpHedgePosition {
@@ -116,8 +117,8 @@ public:
         std::optional<double> actual_proceeds_usdc = std::nullopt
     );
 
-    const std::unordered_map<std::string, Position>& get_open_positions() const;
-    const std::unordered_map<std::string, DumpHedgePosition>& get_open_dh_positions() const;
+    std::unordered_map<std::string, Position> get_open_positions() const;
+    std::unordered_map<std::string, DumpHedgePosition> get_open_dh_positions() const;
 
     void update_balance(double new_balance);
     void set_daily_starting_balance(double balance);
