@@ -21,8 +21,7 @@ OrderRouter::OrderRouter(boost::asio::io_context& ioc,
     : ioc_(ioc), ctx_(ctx), store_(store), risk_manager_(risk_manager),
       clob_api_url_(clob_api_url), funder_address_(funder_address), 
       paper_mode_(paper_mode) {
-    
-    signer_ = std::make_unique<EIP712Signer>(private_key_hex, chain_id_str, verifying_contract);
+    signer_ = std::make_unique<EIP712Signer>(std::stoull(chain_id_str), verifying_contract, private_key_hex);
 }
 
 OrderRouter::~OrderRouter() {}
@@ -207,7 +206,7 @@ void OrderRouter::execute_rest_order(const Order& order, const Signature& sig, c
     ord["side"] = order.side;
     ord["signatureType"] = order.signatureType;
     root["order"] = std::move(ord);
-    root["signature"] = sig.vrs;
+    root["signature"] = sig.rsv_hex;
     root["owner"] = funder_address_;
 
     std::string payload = boost::json::serialize(root);
