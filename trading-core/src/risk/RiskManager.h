@@ -120,6 +120,8 @@ public:
     std::unordered_map<std::string, Position> get_open_positions() const;
     std::unordered_map<std::string, DumpHedgePosition> get_open_dh_positions() const;
 
+    void update_peak_price(const std::string& order_id, double peak_price);
+
     void update_balance(double new_balance);
     void set_daily_starting_balance(double balance);
     void set_live_starting_balance(double balance);

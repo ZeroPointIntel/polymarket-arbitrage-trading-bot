@@ -156,6 +156,14 @@ std::unordered_map<std::string, DumpHedgePosition> RiskManager::get_open_dh_posi
     return open_dh_positions_;
 }
 
+void RiskManager::update_peak_price(const std::string& order_id, double peak_price) {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    auto it = open_positions_.find(order_id);
+    if (it != open_positions_.end()) {
+        it->second.peak_price = peak_price;
+    }
+}
+
 bool RiskManager::is_trading_allowed_no_lock() {
     check_daily_reset();
     check_circuit_breaker_resume();

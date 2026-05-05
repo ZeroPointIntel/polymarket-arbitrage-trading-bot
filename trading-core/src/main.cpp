@@ -76,7 +76,10 @@ void check_and_close_positions(risk::RiskManager& risk_manager, StateStore& stor
         double age = now - p.opened_at;
 
         // Update peak price
-        if (current_price > p.peak_price) p.peak_price = current_price;
+        if (current_price > p.peak_price) {
+            p.peak_price = current_price;
+            risk_manager.update_peak_price(id, current_price);
+        }
         
         double peak_pnl_pct = (p.entry_price > 0) ? (p.peak_price - p.entry_price) / p.entry_price : 0.0;
         double drawdown_from_peak = (p.peak_price > 0) ? (p.peak_price - current_price) / p.peak_price : 0.0;
