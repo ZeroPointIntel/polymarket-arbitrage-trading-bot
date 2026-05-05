@@ -67,7 +67,7 @@ void check_and_close_positions(risk::RiskManager& risk_manager, StateStore& stor
     
     // 1. Process Latency Arb (LA) positions - with Early Exit logic
     auto open_la = risk_manager.get_open_positions();
-    for (const auto& [id, p] : open_la) {
+    for (auto& [id, p] : open_la) {
         if (p.strategy != "LA") continue;
 
         auto live_bid = store.get_token_bid(p.token_id);
