@@ -28,8 +28,8 @@ struct ExitConfig {
     double near_win_price = 0.92;
     double near_loss_price = 0.08;
     double take_profit_price = 0.72;
-    double take_profit_pnl = 0.12;
-    double stop_loss_pnl = -0.10;
+    double take_profit_pnl = 0.15;
+    double stop_loss_pnl = -0.18;
     double position_timeout_seconds = 270.0; // 4.5 minutes
     double trailing_stop_activation = 0.06;
     double trailing_stop_distance = 0.04;
@@ -283,7 +283,7 @@ int main() {
                 store.update_markets(all_m);
                 {
                     std::lock_guard<std::mutex> lock(detector_mutex);
-                    for (auto& det : la_detectors) { det->set_active_markets(all_m); det->set_entry_price_range(0.10, 0.90); }
+                    for (auto& det : la_detectors) { det->set_active_markets(all_m); det->set_entry_price_range(0.20, 0.80); }
                     dh_detector = std::make_unique<DumpHedgeDetector>(store, all_m, 0.93, 0.02, 60.0, 30.0);
                 }
                 std::vector<std::string> tokens;

@@ -24,9 +24,9 @@ LatencyArbDetector::LatencyArbDetector(StateStore& state_store,
       asset_(std::move(asset)),
       price_resolver_(std::move(price_resolver))
 {
-    asset_configs_["btc"] = {150.0, 20.0, 5.0};
-    asset_configs_["eth"] = {10.0, 1.5, 0.53};
-    asset_configs_["sol"] = {1.5, 0.2, 0.05};
+    asset_configs_["btc"] = {180.0, 35.0, 25.0};
+    asset_configs_["eth"] = {12.0, 2.5, 1.2};
+    asset_configs_["sol"] = {1.8, 0.4, 0.15};
 
     spdlog::info("LatencyArbDetector initialized | Asset: {} | Markets: {} | MinEdge: {:.3f} | Lag: {:.1f}s",
                  asset_, active_markets_.size(), min_edge_threshold_, lag_window_seconds_);
