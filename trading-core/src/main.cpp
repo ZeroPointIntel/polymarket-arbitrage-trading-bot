@@ -310,7 +310,7 @@ int main() {
             risk_manager.is_trading_allowed(); // Trigger resume checks even if no signals fire
             check_and_close_positions(risk_manager, store, router, exit_cfg);
             std::cout << store.get_dashboard_json() << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
 
         feed_work.reset();

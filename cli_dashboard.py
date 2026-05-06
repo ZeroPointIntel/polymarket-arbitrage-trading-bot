@@ -363,21 +363,23 @@ async def run_dashboard():
 
     import websockets
 
-    with Live(dash.build(), refresh_per_second=5, screen=True, console=console) as live:
+    # Pass the dashboard build method as a callable to Live for automatic refreshing
+    with Live(dash.build(), refresh_per_second=4, screen=True, console=console) as live:
         while True:
             try:
                 async with websockets.connect(uri, ping_interval=None) as ws:
                     while True:
                         raw = await ws.recv()
                         try:
+                            # 1. Update internal data
                             dash.update(json.loads(raw))
+                            # 2. Update the live display with the new layout
+                            live.update(dash.build())
                         except json.JSONDecodeError:
                             pass
-                        live.update(dash.build())
             except Exception:
-                # Show "disconnected" but keep dashboard alive
-                live.update(dash.build())
-                await asyncio.sleep(1)
+                # On connection error, just wait and retry
+                await asyncio.sleep(2)
 
 
 if __name__ == "__main__":
