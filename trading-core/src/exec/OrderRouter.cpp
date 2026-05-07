@@ -1,5 +1,13 @@
 #include "OrderRouter.h"
 #include <boost/json.hpp>
+#include <boost/asio/connect.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ssl/error.hpp>
+#include <boost/asio/ssl/stream.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
+#include <boost/beast/ssl.hpp>
+#include <boost/beast/version.hpp>
 #include <spdlog/spdlog.h>
 #include <fmt/core.h>
 #include <chrono>
@@ -268,6 +276,16 @@ void OrderRouter::execute_rest_order(const Order& order, const Signature& sig, c
         beast::flat_buffer buffer;
         http::response<http::string_body> res;
         http::read(stream, buffer, res);
+        
+        double target_price = 0.0;
+        double size_shares = 0.0;
+        if (order.side == 0) { // BUY
+            target_price = std::stod(order.makerAmount) / std::stod(order.takerAmount);
+            size_shares = std::stod(order.takerAmount) / 1000000.0;
+        } else { // SELL
+            target_price = std::stod(order.takerAmount) / std::stod(order.makerAmount);
+            size_shares = std::stod(order.makerAmount) / 1000000.0;
+        }
 
         beast::error_code ec;
         stream.shutdown(ec);
