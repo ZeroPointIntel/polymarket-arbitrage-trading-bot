@@ -286,6 +286,10 @@ class Dashboard:
         t.add_row("Total PnL", self._pnl_text(total_pnl))
         t.add_row("LA PnL",    Text(f"{'+' if la_pnl>=0 else ''}${la_pnl:.2f}", style="cyan"))
         t.add_row("DH PnL",    Text(f"{'+' if dh_pnl>=0 else ''}${dh_pnl:.2f}", style="magenta"))
+        la_trades = d.get("totalTrades", 0)
+        dh_trades = d.get("totalDhTrades", 0)
+        wr        = d.get("winRate", 0.0)
+
         t.add_row("Win Rate",  Text(f"{wr:.1f}%  ({la_trades} LA / {dh_trades} DH)", style="white"))
         t.add_row("Open Pos",  f"{open_pos} / 3")
         t.add_row("Max Drawdown", Text(f"${abs(total_pnl - 0):.2f} ({drawdown:.2f}%)",
@@ -346,6 +350,9 @@ class Dashboard:
         status = d.get("status", 0)
         sl = STATUS_LABELS.get(status, "UNKNOWN")
         sc = STATUS_COLORS.get(status, "bold white")
+        is_paper  = d.get("isPaperMode", True)
+        start_bal = d.get("startingBalance", 1000.0)
+        
         footer = Text.assemble(
             (f" ● {sl} ", sc), "│ ",
             ("PAPER MODE" if is_paper else "LIVE TRADING", "bold yellow" if is_paper else "bold green"),
