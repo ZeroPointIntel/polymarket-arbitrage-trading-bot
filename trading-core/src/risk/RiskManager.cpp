@@ -39,7 +39,8 @@ RiskManager::RiskManager(
     int circuit_breaker_min_losses,
     int circuit_breaker_window,
     double circuit_breaker_loss_pct,
-    double circuit_breaker_pause_seconds
+    double circuit_breaker_pause_seconds,
+    double min_order_size
 ) : max_position_fraction_(max_position_fraction),
     daily_loss_limit_(daily_loss_limit),
     total_drawdown_kill_(total_drawdown_kill),
