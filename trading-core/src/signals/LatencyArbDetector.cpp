@@ -24,7 +24,7 @@ LatencyArbDetector::LatencyArbDetector(StateStore& state_store,
       asset_(std::move(asset)),
       price_resolver_(std::move(price_resolver))
 {
-    asset_configs_["btc"] = {180.0, 35.0, 15.0};
+    asset_configs_["btc"] = {150.0, 20.0, 25.0};
     asset_configs_["eth"] = {12.0, 2.5, 1.2};
     asset_configs_["sol"] = {1.8, 0.4, 0.15};
 
@@ -138,8 +138,8 @@ std::optional<LatencyArbSignal> LatencyArbDetector::evaluate(double current_time
 
         if (pm_price <= 0.0 || pm_price >= 1.0) continue;
 
-        // Strict Filter: Entry Zone
-        if (pm_price < min_entry_price_ || pm_price > max_entry_price_) continue;
+        // Strict Filter: Entry Zone (Narrowed for $50 balance safety)
+        if (pm_price < 0.35 || pm_price > 0.65) continue;
 
         double edge = fair_value - pm_price;
         

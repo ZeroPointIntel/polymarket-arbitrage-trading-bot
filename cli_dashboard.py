@@ -95,20 +95,22 @@ class Dashboard:
         sl = STATUS_LABELS.get(status, "UNKNOWN")
         sc = STATUS_COLORS.get(status, "bold white")
 
-        balance   = d.get("balance", PAPER_START)
+        balance   = d.get("balance", 0.0)
         daily_pnl = d.get("dailyPnl", 0.0)
         total_pnl = d.get("totalPnl", 0.0)
-        daily_s   = d.get("dailyStartingBalance", PAPER_START)
-        peak      = d.get("peakBalance", PAPER_START) or PAPER_START
+        daily_s   = d.get("dailyStartingBalance", 1.0)
+        peak      = d.get("peakBalance", balance) or balance
+        is_paper  = d.get("isPaperMode", True)
+        start_bal = d.get("startingBalance", 1000.0)
 
         dpct = (daily_pnl / daily_s  * 100) if daily_s  > 0 else 0.0
-        tpct = (total_pnl / PAPER_START * 100)
+        tpct = (total_pnl / start_bal * 100) if start_bal > 0 else 0.0
         tot_trades = d.get("totalTrades", 0) + d.get("totalDhTrades", 0)
         wr = d.get("winRate", 0.0)
 
         row = Text.assemble(
             (now_str, "dim"), "   ",
-            ("◆ PAPER", "bold yellow"), "  ",
+            ("◆ PAPER" if is_paper else "◆ LIVE", "bold yellow" if is_paper else "bold green"), "  ",
             (f"● {sl}", sc), "   ",
             ("Uptime ", "dim"), (self._uptime(), "white"), "   ",
             ("Balance ", "dim"), (f"${balance:,.2f}", "bold green"), "   ",
@@ -268,12 +270,11 @@ class Dashboard:
         total_pnl = d.get("totalPnl",  0.0)
         la_pnl    = d.get("laPnl",     0.0)
         dh_pnl    = d.get("dhPnl",     0.0)
-        wr        = d.get("winRate",   0.0)
-        la_trades = d.get("totalTrades", 0)
-        dh_trades = d.get("totalDhTrades", 0)
         open_pos  = d.get("openCount", 0)
         drawdown  = d.get("maxDrawdownPct", 0.0)
-        daily_limit = PAPER_START * 0.20  # 20% daily limit
+        is_paper  = d.get("isPaperMode", True)
+        start_bal = d.get("startingBalance", 1000.0)
+        daily_limit = start_bal * 0.20  # 20% daily limit
 
         daily_used_pct = abs(daily_pnl) / daily_limit * 100 if daily_limit > 0 else 0.0
 
@@ -347,7 +348,8 @@ class Dashboard:
         sc = STATUS_COLORS.get(status, "bold white")
         footer = Text.assemble(
             (f" ● {sl} ", sc), "│ ",
-            ("PAPER MODE · $1,000 BALANCE", "bold yellow"), " │ POLYGON:137 │ ",
+            ("PAPER MODE" if is_paper else "LIVE TRADING", "bold yellow" if is_paper else "bold green"),
+            (f" · ${start_bal:,.0f} BASE", "white"), " │ POLYGON:137 │ ",
             ("STRATEGY: LA + DH", "cyan"), " │ Ctrl+C to stop",
         )
         layout["footer"].update(footer)

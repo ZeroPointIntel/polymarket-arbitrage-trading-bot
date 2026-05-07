@@ -120,9 +120,33 @@ void OrderRouter::submit_dump_hedge_order(const DumpHedgeSignal& signal, double 
         risk_manager_.register_dh_open(dh_pos);
         spdlog::info("[PAPER DH] OPENED | {} | Entry: {:.4f} | Locked Profit: ${:.2f}", signal.asset, signal.combined_price, dh_pos.locked_profit_usdc);
     } else {
-        // Real DH execution would go here (signing both legs and submitting to CLOB)
-        // For now, same as paper if not fully implemented for LIVE
-        spdlog::warn("LIVE DH submission not fully implemented for CLOB. Defaulting to Paper Simulation.");
+        spdlog::info("[LIVE DH] Initiating dual-leg submission for {}...", signal.asset);
+        
+        // 1. Submit YES leg
+        submit_order(signal.yes_token_id, signal.yes_price, size_shares, 0); // BUY
+        
+        // 2. Submit NO leg
+        submit_order(signal.no_token_id, signal.no_price, size_shares, 0); // BUY
+
+        // Register in RiskManager as a combined position
+        risk::DumpHedgePosition dh_pos;
+        dh_pos.dh_id = dh_id;
+        dh_pos.asset = signal.asset;
+        dh_pos.market_question = signal.market.question;
+        dh_pos.yes_token_id = signal.yes_token_id;
+        dh_pos.no_token_id = signal.no_token_id;
+        dh_pos.yes_entry_price = signal.yes_price;
+        dh_pos.no_entry_price = signal.no_price;
+        dh_pos.combined_entry_price = signal.combined_price;
+        dh_pos.size_shares = size_shares;
+        dh_pos.combined_cost_usdc = signal.combined_price * size_shares;
+        dh_pos.locked_profit_usdc = (1.0 - signal.combined_price) * size_shares;
+        dh_pos.opened_at = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+        dh_pos.end_date_ts = signal.market.end_date_ts;
+        dh_pos.paper_mode = false;
+
+        risk_manager_.register_dh_open(dh_pos);
+        spdlog::info("[LIVE DH] REGISTERED | {} | Total Cost: ${:.2f}", signal.asset, dh_pos.combined_cost_usdc);
     }
 }
 
@@ -191,6 +215,9 @@ void OrderRouter::simulate_paper_order(const Order& order, const Signature& sig,
 }
 
 void OrderRouter::execute_rest_order(const Order& order, const Signature& sig, const std::string& asset, const std::string& question, double end_date_ts, const std::string& strategy, const std::string& original_order_id) {
+    namespace beast = boost::beast;
+    namespace http = beast::http;
+
     boost::json::object root;
     boost::json::object ord;
     ord["salt"] = order.salt;
@@ -211,38 +238,92 @@ void OrderRouter::execute_rest_order(const Order& order, const Signature& sig, c
 
     std::string payload = boost::json::serialize(root);
     
-    spdlog::info("REST API Order Placement: POST {}/orders -> {}", clob_api_url_, payload);
-    
-    if (order.side == 0) {
-        double target_price = std::stod(order.makerAmount) / std::stod(order.takerAmount);
-        double size_shares = std::stod(order.takerAmount) / 1000000.0;
-        
-        // In a real implementation, we would parse the REST response for the 'price' field.
-        // For now, we log the intent and calculate slippage once the actual fill is known.
-        double actual_fill_price = target_price; // Placeholder for actual API response
-        double slippage = (actual_fill_price - target_price) / target_price;
+    spdlog::info("[LIVE EXEC] Dispatching order to Polymarket CLOB: {}", payload);
 
-        risk::Position pos;
-        pos.order_id = "live_" + order.salt;
-        pos.token_id = order.tokenId;
-        pos.market_question = question;
-        pos.side = "BUY";
-        pos.entry_price = actual_fill_price; 
-        pos.size_shares = size_shares;
-        pos.cost_usdc = actual_fill_price * size_shares;
-        pos.opened_at = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
-        pos.end_date_ts = end_date_ts;
-        pos.asset = asset;
-        pos.strategy = strategy;
-        pos.paper_mode = false;
+    try {
+        // Simple synchronous POST via Beast
+        std::string host = "clob.polymarket.com";
+        std::string target = "/orders";
 
-        risk_manager_.register_trade_open(pos);
-        
-        spdlog::info("[LIVE EXEC] Trade Filled | {} | Price: {:.4f} | Slippage: {:.4f}%", 
-                     asset, actual_fill_price, slippage * 100.0);
-    } else {
-        double price = std::stod(order.takerAmount) / std::stod(order.makerAmount);
-        risk_manager_.register_trade_close(original_order_id, price);
+        boost::asio::ip::tcp::resolver resolver(ioc_);
+        beast::ssl_stream<beast::tcp_stream> stream(ioc_, ctx_);
+
+        if(!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) {
+            throw std::runtime_error("Failed to set SNI hostname");
+        }
+
+        auto const results = resolver.resolve(host, "443");
+        beast::get_lowest_layer(stream).connect(results);
+        stream.handshake(boost::asio::ssl::stream_base::client);
+
+        http::request<http::string_body> req{http::verb::post, target, 11};
+        req.set(http::field::host, host);
+        req.set(http::field::user_agent, "PolymarketBot/1.0");
+        req.set(http::field::content_type, "application/json");
+        req.body() = payload;
+        req.prepare_payload();
+
+        http::write(stream, req);
+
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
+
+        beast::error_code ec;
+        stream.shutdown(ec);
+
+        if (res.result() != http::status::ok && res.result() != http::status::created) {
+            spdlog::error("[LIVE EXEC] Order REJECTED by CLOB: {} | Body: {}", res.result_int(), res.body());
+            return;
+        }
+
+        auto response_json = boost::json::parse(res.body()).as_object();
+        spdlog::info("[LIVE EXEC] Order Response: {}", res.body());
+
+        double actual_price = target_price;
+        double filled_size = 0.0;
+
+        if (response_json.contains("price")) {
+            actual_price = std::stod(std::string(response_json["price"].as_string()));
+        }
+        if (response_json.contains("size_matched")) {
+            filled_size = std::stod(std::string(response_json["size_matched"].as_string())) / 1000000.0;
+        } else if (response_json.contains("status") && response_json["status"].as_string() == "filled") {
+            filled_size = size_shares; // Fallback if status is filled
+        }
+
+        if (filled_size <= 0) {
+            spdlog::warn("[LIVE EXEC] Order accepted by CLOB but 0 size matched. No position opened.");
+            return;
+        }
+
+        if (order.side == 0) { // BUY
+            double slippage = (actual_price - target_price) / target_price;
+            
+            // Register position with ACTUAL data
+            risk::Position pos;
+            pos.order_id = "live_" + order.salt;
+            pos.token_id = order.tokenId;
+            pos.market_question = question;
+            pos.side = "BUY";
+            pos.entry_price = actual_price; 
+            pos.size_shares = filled_size;
+            pos.cost_usdc = actual_price * filled_size;
+            pos.opened_at = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+            pos.end_date_ts = end_date_ts;
+            pos.asset = asset;
+            pos.strategy = strategy;
+            pos.paper_mode = false;
+
+            risk_manager_.register_trade_open(pos);
+            spdlog::info("[LIVE EXEC] Trade FILLED | {} | Price: {:.4f} | Size: {:.2f} | Slippage: {:.4f}%", 
+                         asset, actual_price, filled_size, slippage * 100.0);
+        } else { // SELL
+            risk_manager_.register_trade_close(original_order_id, actual_price);
+            spdlog::info("[LIVE EXEC] Trade CLOSED | {} | Price: {:.4f}", asset, actual_price);
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("[LIVE EXEC] Network error during order submission: {}", e.what());
     }
 }
 

@@ -76,7 +76,8 @@ public:
         int circuit_breaker_min_losses = 3,
         int circuit_breaker_window = 5,
         double circuit_breaker_loss_pct = 0.02,
-        double circuit_breaker_pause_seconds = 300.0
+        double circuit_breaker_pause_seconds = 300.0,
+        double min_order_size = 5.0
     );
 
     TradingStatus get_status() const;
@@ -84,6 +85,7 @@ public:
     double get_current_balance() const;
     double get_daily_starting_balance() const;
     double get_peak_balance() const;
+    double get_starting_balance() const;
     int get_open_position_count() const;
     double get_win_rate() const;
     
@@ -150,6 +152,7 @@ private:
     int circuit_breaker_min_losses_;
     double circuit_breaker_loss_pct_;
     double circuit_breaker_pause_seconds_;
+    double min_order_size_;
 
     double starting_balance_;
     double current_balance_;

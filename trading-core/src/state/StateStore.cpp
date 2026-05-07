@@ -139,10 +139,11 @@ std::string StateStore::get_dashboard_json() const {
     
     if (risk_manager_) {
         double balance = risk_manager_->get_current_balance();
+        double start = risk_manager_->get_starting_balance();
         double daily_start = risk_manager_->get_daily_starting_balance();
         double peak = risk_manager_->get_peak_balance();
         double daily_pnl = balance - daily_start;
-        double total_pnl = balance - 1000.0; // Paper start $1000
+        double total_pnl = balance - start;
         double drawdown = peak > 0 ? (peak - balance) / peak * 100.0 : 0.0;
 
         root["balance"] = balance;
@@ -158,6 +159,8 @@ std::string StateStore::get_dashboard_json() const {
         root["laPnl"] = risk_manager_->get_la_pnl();
         root["dhPnl"] = risk_manager_->get_dh_pnl();
         root["status"] = static_cast<int>(risk_manager_->get_status());
+        root["isPaperMode"] = paper_mode_;
+        root["startingBalance"] = start;
 
         boost::json::array pos_arr;
         for (const auto& [id, p] : risk_manager_->get_open_positions()) {

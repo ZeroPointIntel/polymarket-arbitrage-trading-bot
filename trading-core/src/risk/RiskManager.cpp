@@ -48,6 +48,7 @@ RiskManager::RiskManager(
     circuit_breaker_min_losses_(circuit_breaker_min_losses),
     circuit_breaker_loss_pct_(circuit_breaker_loss_pct),
     circuit_breaker_pause_seconds_(circuit_breaker_pause_seconds),
+    min_order_size_(min_order_size),
     starting_balance_(starting_balance),
     current_balance_(starting_balance),
     peak_balance_(starting_balance),
@@ -92,6 +93,11 @@ double RiskManager::get_daily_starting_balance() const {
 double RiskManager::get_peak_balance() const {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     return peak_balance_;
+}
+
+double RiskManager::get_starting_balance() const {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    return starting_balance_;
 }
 
 int RiskManager::get_open_position_count() const {
@@ -187,6 +193,10 @@ std::pair<bool, std::string> RiskManager::can_open_position(double position_size
 
     if (position_size_usdc > current_balance_) {
         return {false, "Insufficient balance"};
+    }
+
+    if (position_size_usdc < min_order_size_) {
+        return {false, "Position size $" + std::to_string(position_size_usdc) + " below minimum $" + std::to_string(min_order_size_)};
     }
 
     return {true, "OK"};

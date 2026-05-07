@@ -29,6 +29,8 @@ struct TokenPrice {
 class StateStore {
 public:
     void set_risk_manager(risk::RiskManager* rm) { risk_manager_ = rm; }
+    void set_paper_mode(bool pm) { paper_mode_ = pm; }
+    bool is_paper_mode() const { return paper_mode_; }
 
     void update_btc_price(const PriceTick& tick);
     std::optional<PriceTick> get_latest_btc_price() const;
@@ -56,6 +58,7 @@ public:
 
 private:
     risk::RiskManager* risk_manager_ = nullptr;
+    bool paper_mode_ = true;
     mutable std::shared_mutex btc_mutex_;
     PriceTick latest_btc_tick_{};
     std::deque<PriceTick> btc_history_;

@@ -189,8 +189,15 @@ int main() {
         boost::asio::ssl::context gamma_ctx{boost::asio::ssl::context::sslv23_client};
         gamma_ctx.set_default_verify_paths();
 
+        double max_pos = env.count("RISK_MAX_POSITION_FRACTION") ? std::stod(env["RISK_MAX_POSITION_FRACTION"]) : 0.08;
+        double daily_loss = env.count("RISK_DAILY_LOSS_LIMIT") ? std::stod(env["RISK_DAILY_LOSS_LIMIT"]) : 0.20;
+        double drawdown = env.count("RISK_TOTAL_DRAWDOWN_KILL") ? std::stod(env["RISK_TOTAL_DRAWDOWN_KILL"]) : 0.40;
+        int max_concurrent = env.count("RISK_MAX_CONCURRENT_POSITIONS") ? std::stoi(env["RISK_MAX_CONCURRENT_POSITIONS"]) : 3;
+        double min_order = env.count("MIN_ORDER_SIZE") ? std::stod(env["MIN_ORDER_SIZE"]) : 5.0;
+
         StateStore store;
-        risk::RiskManager risk_manager(starting_balance);
+        store.set_paper_mode(paper_mode);
+        risk::RiskManager risk_manager(starting_balance, max_pos, daily_loss, drawdown, max_concurrent, true, 3, 5, 0.02, 300.0, min_order);
         store.set_risk_manager(&risk_manager);
         KellySizer kelly_sizer(0.5, 0.08);
 
