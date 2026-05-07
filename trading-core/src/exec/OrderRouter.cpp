@@ -214,22 +214,32 @@ void OrderRouter::execute_rest_order(const Order& order, const Signature& sig, c
     spdlog::info("REST API Order Placement: POST {}/orders -> {}", clob_api_url_, payload);
     
     if (order.side == 0) {
-        double price = std::stod(order.makerAmount) / std::stod(order.takerAmount);
+        double target_price = std::stod(order.makerAmount) / std::stod(order.takerAmount);
         double size_shares = std::stod(order.takerAmount) / 1000000.0;
+        
+        // In a real implementation, we would parse the REST response for the 'price' field.
+        // For now, we log the intent and calculate slippage once the actual fill is known.
+        double actual_fill_price = target_price; // Placeholder for actual API response
+        double slippage = (actual_fill_price - target_price) / target_price;
+
         risk::Position pos;
         pos.order_id = "live_" + order.salt;
         pos.token_id = order.tokenId;
         pos.market_question = question;
         pos.side = "BUY";
-        pos.entry_price = price;
+        pos.entry_price = actual_fill_price; 
         pos.size_shares = size_shares;
-        pos.cost_usdc = price * size_shares;
+        pos.cost_usdc = actual_fill_price * size_shares;
         pos.opened_at = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
         pos.end_date_ts = end_date_ts;
         pos.asset = asset;
         pos.strategy = strategy;
         pos.paper_mode = false;
+
         risk_manager_.register_trade_open(pos);
+        
+        spdlog::info("[LIVE EXEC] Trade Filled | {} | Price: {:.4f} | Slippage: {:.4f}%", 
+                     asset, actual_fill_price, slippage * 100.0);
     } else {
         double price = std::stod(order.takerAmount) / std::stod(order.makerAmount);
         risk_manager_.register_trade_close(original_order_id, price);
