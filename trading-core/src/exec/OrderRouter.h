@@ -16,7 +16,7 @@ class OrderRouter {
 public:
     OrderRouter(boost::asio::io_context& ioc, 
                 boost::asio::ssl::context& ctx,
-                StateStore& store,
+                trading::StateStore& store,
                 risk::RiskManager& risk_manager,
                 const std::string& clob_api_url, 
                 const std::string& chain_id_str,
@@ -39,7 +39,7 @@ public:
 private:
     boost::asio::io_context& ioc_;
     boost::asio::ssl::context& ctx_;
-    StateStore& store_;
+    trading::StateStore& store_;
     risk::RiskManager& risk_manager_;
 
     std::string clob_api_url_;

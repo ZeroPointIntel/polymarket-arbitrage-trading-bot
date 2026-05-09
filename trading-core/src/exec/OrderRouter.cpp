@@ -18,7 +18,7 @@ namespace exec {
 
 OrderRouter::OrderRouter(boost::asio::io_context& ioc, 
                         boost::asio::ssl::context& ctx,
-                        StateStore& store,
+                        trading::StateStore& store,
                         risk::RiskManager& risk_manager,
                         const std::string& clob_api_url, 
                         const std::string& chain_id_str,
