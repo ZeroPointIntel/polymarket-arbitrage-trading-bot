@@ -236,7 +236,7 @@ int main() {
             if (!funder.empty()) {
                 spdlog::info("Fetching on-chain USDC balance for {}...", funder);
                 double live_bal = fetch_usdc_balance(funder);
-                if (live_bal > 0) {
+                if (live_bal >= 0) {
                     starting_balance = live_bal;
                     spdlog::info("Detected live USDC balance: ${:.2f}", starting_balance);
                 } else {
