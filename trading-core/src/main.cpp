@@ -272,18 +272,24 @@ int main() {
         if (paper_mode && env.count("PAPER_STARTING_BALANCE")) {
             starting_balance = std::stod(env["PAPER_STARTING_BALANCE"]);
         } else if (!paper_mode) {
-            // Auto-detect USDC balance from Polygon blockchain
-            starting_balance = 0.0; // Default to $0 for live
-            std::string funder = env.count("POLYMARKET_FUNDER") ? env["POLYMARKET_FUNDER"] : "";
-            if (!funder.empty()) {
-                spdlog::info("Fetching on-chain USDC balance for {}...", funder);
-                double live_bal = fetch_usdc_balance(funder);
-                if (live_bal >= 0) {
-                    starting_balance = live_bal;
-                    spdlog::info("Detected live USDC balance: ${:.2f}", starting_balance);
-                } else {
-                    spdlog::warn("Could not fetch on-chain balance. Starting with $0.00");
+            // Auto-detect balance via Python SDK (most reliable method)
+            starting_balance = 0.0;
+            spdlog::info("Fetching Polymarket balance via SDK...");
+            FILE* pipe = popen("python3 fetch_balance.py 2>/dev/null", "r");
+            if (pipe) {
+                char buf[128];
+                if (fgets(buf, sizeof(buf), pipe)) {
+                    try {
+                        starting_balance = std::stod(std::string(buf));
+                        spdlog::info("Detected Polymarket balance: ${:.2f}", starting_balance);
+                    } catch (...) {
+                        spdlog::warn("Could not parse balance output: {}", buf);
+                    }
                 }
+                pclose(pipe);
+            }
+            if (starting_balance <= 0) {
+                spdlog::warn("Polymarket balance is $0.00. Deposit USDC to start trading.");
             }
         }
 
