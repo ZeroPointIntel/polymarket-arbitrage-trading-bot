@@ -282,7 +282,6 @@ int main() {
                     try {
                         starting_balance = std::stod(std::string(buf));
                         spdlog::info("Detected Polymarket balance: ${:.2f}", starting_balance);
-                        store.push_telemetry(fmt::format("💰 BALANCE SYNCED | ${:.2f}", starting_balance));
                     } catch (...) {
                         spdlog::warn("Could not parse balance output: {}", buf);
                     }
@@ -341,6 +340,9 @@ int main() {
 
         StateStore store;
         store.set_paper_mode(paper_mode);
+        if (!paper_mode) {
+            store.push_telemetry(fmt::format("💰 BALANCE SYNCED | ${:.2f}", starting_balance));
+        }
         risk::RiskManager risk_manager(starting_balance, max_pos, daily_loss, drawdown, max_concurrent, true, 3, 5, 0.02, 300.0, min_order);
         store.set_risk_manager(&risk_manager);
         KellySizer kelly_sizer(0.5, 0.08);
