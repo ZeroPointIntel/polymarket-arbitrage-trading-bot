@@ -28,46 +28,63 @@ def test_polymarket_auth():
     except Exception as e:
         print(f"❌ Public /time Failed: {e}")
 
-    # 2. TEST AUTHENTICATED VARIANTS
-    variants = ["/orders", "/orders/", "/v1/orders"]
+    # 2. TEST AUTHENTICATED ENDPOINT (/orders)
+    path = "/orders"
+    print(f"\n📡 Testing Authentication via {path}...")
+    method = "GET"
+    timestamp = str(int(time.time()))
+    nonce = "0" # Some versions require nonce even on GET
+    message = timestamp + method + path + nonce
     
-    for path in variants:
-        print(f"\n📡 Testing Authentication via {path}...")
-        method = "GET"
-        timestamp = str(int(time.time()))
-        message = timestamp + method + path
+    # Robust decoding
+    api_secret_clean = api_secret.strip().replace('-', '+').replace('_', '/')
+    while len(api_secret_clean) % 4 != 0:
+        api_secret_clean += '='
+    secret_bytes = base64.b64decode(api_secret_clean)
         
-        # Robust decoding
-        api_secret_clean = api_secret.strip().replace('-', '+').replace('_', '/')
-        while len(api_secret_clean) % 4 != 0:
-            api_secret_clean += '='
+    signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
+    signature = base64.b64encode(signature_bytes).decode('utf-8')
+    
+    # Try Hyphens first, then Underscores if fails
+    header_sets = [
+        {
+            "POLY-API-KEY": api_key,
+            "POLY-PASSPHRASE": api_passphrase,
+            "POLY-TIMESTAMP": timestamp,
+            "POLY-SIGNATURE": signature,
+            "POLY-ADDRESS": signer_address.lower(),
+            "POLY-NONCE": nonce
+        },
+        {
+            "POLY_API_KEY": api_key,
+            "POLY_PASSPHRASE": api_passphrase,
+            "POLY_TIMESTAMP": timestamp,
+            "POLY_SIGNATURE": signature,
+            "POLY_ADDRESS": signer_address.lower(),
+            "POLY_NONCE": nonce
+        }
+    ]
+    
+    for headers in header_sets:
+        style = "Hyphens" if "-" in list(headers.keys())[0] else "Underscores"
+        print(f"--- Trying {style} ---")
+        headers.update({
+            "User-Agent": "python-requests/2.31.0",
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        })
         
         try:
-            secret_bytes = base64.b64decode(api_secret_clean)
-            signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
-            signature = base64.b64encode(signature_bytes).decode('utf-8')
-            
-            headers = {
-                "POLY-API-KEY": api_key,
-                "POLY-PASSPHRASE": api_passphrase,
-                "POLY-TIMESTAMP": timestamp,
-                "POLY-SIGNATURE": signature,
-                "POLY-ADDRESS": signer_address.lower(),
-                "User-Agent": "python-requests/2.31.0",
-                "Accept": "application/json",
-                "Content-Type": "application/json"
-            }
-            
             response = requests.get(f"https://{host}{path}", headers=headers, timeout=10)
-            print(f"Result for {path}: Status {response.status_code}")
+            print(f"Result: Status {response.status_code}")
             if response.status_code == 200:
-                print(f"✅ SUCCESS on {path}!")
+                print(f"✅ SUCCESS with {style}!")
                 print(f"Response: {response.json()}")
                 return
             else:
-                print(f"❌ Failed on {path}: {response.text}")
+                print(f"❌ Failed: {response.text}")
         except Exception as e:
-            print(f"❌ Error during test on {path}: {e}")
+            print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
     test_polymarket_auth()
