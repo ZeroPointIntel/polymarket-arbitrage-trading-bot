@@ -33,7 +33,7 @@ def test_polymarket_auth():
     print(f"\n📡 Testing Authentication via {path}...")
     method = "GET"
     timestamp = str(int(time.time()))
-    nonce = "0" # Some versions require nonce even on GET
+    nonce = "0"
     message = timestamp + method + path + nonce
     
     # Robust decoding
@@ -45,46 +45,30 @@ def test_polymarket_auth():
     signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
     signature = base64.b64encode(signature_bytes).decode('utf-8')
     
-    # Try Hyphens first, then Underscores if fails
-    header_sets = [
-        {
-            "POLY-API-KEY": api_key,
-            "POLY-PASSPHRASE": api_passphrase,
-            "POLY-TIMESTAMP": timestamp,
-            "POLY-SIGNATURE": signature,
-            "POLY-ADDRESS": signer_address.lower(),
-            "POLY-NONCE": nonce
-        },
-        {
-            "POLY_API_KEY": api_key,
-            "POLY_PASSPHRASE": api_passphrase,
-            "POLY_TIMESTAMP": timestamp,
-            "POLY_SIGNATURE": signature,
-            "POLY_ADDRESS": signer_address.lower(),
-            "POLY_NONCE": nonce
-        }
-    ]
+    headers = {
+        "POLY-API-KEY": api_key,
+        "POLY-SIGNATURE": signature,
+        "POLY-TIMESTAMP": timestamp,
+        "POLY-PASSPHRASE": api_passphrase,
+        "POLY-ADDRESS": signer_address.lower(),
+        "POLY-NONCE": nonce,
+        "POLY-SIGNATURE-TYPE": "1", # Key for Proxy Wallets
+        "User-Agent": "python-requests/2.31.0",
+        "Accept": "application/json"
+    }
     
-    for headers in header_sets:
-        style = "Hyphens" if "-" in list(headers.keys())[0] else "Underscores"
-        print(f"--- Trying {style} ---")
-        headers.update({
-            "User-Agent": "python-requests/2.31.0",
-            "Accept": "application/json",
-            "Content-Type": "application/json"
-        })
-        
-        try:
-            response = requests.get(f"https://{host}{path}", headers=headers, timeout=10)
-            print(f"Result: Status {response.status_code}")
-            if response.status_code == 200:
-                print(f"✅ SUCCESS with {style}!")
-                print(f"Response: {response.json()}")
-                return
-            else:
-                print(f"❌ Failed: {response.text}")
-        except Exception as e:
-            print(f"❌ Error: {e}")
+    print(f"📡 Sending request with {len(headers)} headers...")
+    try:
+        response = requests.get(f"https://{host}{path}", headers=headers, timeout=10)
+        print(f"Result: Status {response.status_code}")
+        if response.status_code == 200:
+            print("\n✅ AUTHENTICATION SUCCESSFUL!")
+            print(f"Response: {response.json()}")
+        else:
+            print(f"❌ Failed: {response.status_code}")
+            print(f"Body: {response.text}")
+    except Exception as e:
+        print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
     test_polymarket_auth()
