@@ -22,25 +22,27 @@ def test_polymarket_auth():
         print(f"Signer: {'SET' if signer_address else 'MISSING'}")
         return
 
-    # Endpoint to test (fetch open orders)
+    # 1. TEST PUBLIC ENDPOINT FIRST (/time)
     host = "clob.polymarket.com"
+    print(f"📡 Testing Public Access to {host}/time...")
+    try:
+        t_resp = requests.get(f"https://{host}/time", timeout=5)
+        print(f"✅ Public /time: {t_resp.status_code}")
+    except Exception as e:
+        print(f"❌ Public /time Failed: {e}")
+
+    # 2. TEST AUTHENTICATED ENDPOINT (/orders)
     path = "/orders" 
     method = "GET"
     timestamp = str(int(time.time()))
-    
-    # Compute HMAC Signature
     message = timestamp + method + path
     
     # Robust decoding
     api_secret = api_secret.strip()
     try:
-        # Standardize to standard base64 if it's urlsafe
         api_secret = api_secret.replace('-', '+').replace('_', '/')
-        
-        # Add padding until it's a multiple of 4
         while len(api_secret) % 4 != 0:
             api_secret += '='
-            
         secret_bytes = base64.b64decode(api_secret)
     except Exception as e:
         print(f"❌ Error decoding API Secret: {e}")
@@ -56,22 +58,21 @@ def test_polymarket_auth():
         "POLY_SIGNATURE": signature,
         "POLY_ADDRESS": signer_address.lower(),
         "User-Agent": "python-requests/2.31.0",
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "Content-Type": "application/json"
     }
     
-    print(f"📡 Testing Authentication for {signer_address}...")
+    print(f"📡 Testing Authentication for {signer_address} via {path}...")
     try:
-        response = requests.get(f"https://{host}{path}", headers=headers)
+        response = requests.get(f"https://{host}{path}", headers=headers, timeout=10)
         if response.status_code == 200:
             print("\n✅ Authentication Successful!")
             print("-" * 40)
-            data = response.json()
-            print(f"Response: {data}")
+            print(f"Orders: {response.json()}")
             print("-" * 40)
-            print("\n🚀 You are ready to go live.")
         else:
             print(f"\n❌ Authentication Failed (Status {response.status_code})")
-            print(f"Error: {response.text}")
+            print(f"Response: {response.text}")
             print("\nTIP: Double check your POLY_API_SECRET is the exact Base64 string from Polymarket.")
     except Exception as e:
         print(f"❌ Network error: {e}")
