@@ -273,6 +273,7 @@ int main() {
             starting_balance = std::stod(env["PAPER_STARTING_BALANCE"]);
         } else if (!paper_mode) {
             // Auto-detect USDC balance from Polygon blockchain
+            starting_balance = 0.0; // Default to $0 for live
             std::string funder = env.count("POLYMARKET_FUNDER") ? env["POLYMARKET_FUNDER"] : "";
             if (!funder.empty()) {
                 spdlog::info("Fetching on-chain USDC balance for {}...", funder);
@@ -281,10 +282,7 @@ int main() {
                     starting_balance = live_bal;
                     spdlog::info("Detected live USDC balance: ${:.2f}", starting_balance);
                 } else {
-                    spdlog::warn("Could not fetch on-chain balance. Using fallback.");
-                    if (env.count("LIVE_STARTING_BALANCE")) {
-                        starting_balance = std::stod(env["LIVE_STARTING_BALANCE"]);
-                    }
+                    spdlog::warn("Could not fetch on-chain balance. Starting with $0.00");
                 }
             }
         }
