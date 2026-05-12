@@ -24,19 +24,15 @@ def test_polymarket_auth():
 
     # Endpoint to test (fetch open orders)
     host = "clob.polymarket.com"
-    path = "/orders?closed=false" 
+    path = "/orders" 
     method = "GET"
     timestamp = str(int(time.time()))
     
     # Compute HMAC Signature
-    # Payload: timestamp + method + path + body
     message = timestamp + method + path
     
-    # Fix potential padding issues in the secret
-    api_secret = api_secret.strip()
-    print(f"🔍 DEBUG: Secret Length: {len(api_secret)}")
-    
     # Robust decoding
+    api_secret = api_secret.strip()
     try:
         # Standardize to standard base64 if it's urlsafe
         api_secret = api_secret.replace('-', '+').replace('_', '/')
@@ -45,7 +41,6 @@ def test_polymarket_auth():
         while len(api_secret) % 4 != 0:
             api_secret += '='
             
-        print(f"🔍 DEBUG: Final Secret Length (with padding): {len(api_secret)}")
         secret_bytes = base64.b64decode(api_secret)
     except Exception as e:
         print(f"❌ Error decoding API Secret: {e}")
@@ -59,7 +54,9 @@ def test_polymarket_auth():
         "POLY_PASSPHRASE": api_passphrase,
         "POLY_TIMESTAMP": timestamp,
         "POLY_SIGNATURE": signature,
-        "POLY_ADDRESS": signer_address.lower()
+        "POLY_ADDRESS": signer_address.lower(),
+        "User-Agent": "python-requests/2.31.0",
+        "Accept": "application/json"
     }
     
     print(f"📡 Testing Authentication for {signer_address}...")
