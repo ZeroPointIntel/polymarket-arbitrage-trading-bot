@@ -9,10 +9,10 @@ from dotenv import load_dotenv
 def test_polymarket_auth():
     load_dotenv()
     
-    api_key = os.getenv("POLY_API_KEY")
-    api_secret = os.getenv("POLY_API_SECRET")
-    api_passphrase = os.getenv("POLY_PASSPHRASE")
-    signer_address = os.getenv("POLYMARKET_SIGNER")
+    api_key = os.getenv("POLY_API_KEY", "").strip()
+    api_secret = os.getenv("POLY_API_SECRET", "").strip()
+    api_passphrase = os.getenv("POLY_PASSPHRASE", "").strip()
+    signer_address = os.getenv("POLYMARKET_SIGNER", "").strip()
     
     if not all([api_key, api_secret, api_passphrase, signer_address]):
         print("❌ Error: Missing credentials in .env file.")
