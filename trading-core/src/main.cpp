@@ -282,6 +282,7 @@ int main() {
                     try {
                         starting_balance = std::stod(std::string(buf));
                         spdlog::info("Detected Polymarket balance: ${:.2f}", starting_balance);
+                        store.push_telemetry(fmt::format("💰 BALANCE SYNCED | ${:.2f}", starting_balance));
                     } catch (...) {
                         spdlog::warn("Could not parse balance output: {}", buf);
                     }
