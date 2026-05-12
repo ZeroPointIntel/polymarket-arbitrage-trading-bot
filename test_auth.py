@@ -35,18 +35,20 @@ def test_polymarket_auth():
     # Fix potential padding issues in the secret
     api_secret = api_secret.strip()
     print(f"🔍 DEBUG: Secret Length: {len(api_secret)}")
-    if len(api_secret) > 6:
-        print(f"🔍 DEBUG: Secret starts with: {api_secret[:3]}... and ends with: ...{api_secret[-3:]}")
     
-    missing_padding = len(api_secret) % 4
-    if missing_padding:
-        api_secret += '=' * (4 - missing_padding)
-        
+    # Robust decoding
     try:
+        # Standardize to standard base64 if it's urlsafe
+        api_secret = api_secret.replace('-', '+').replace('_', '/')
+        
+        # Add padding until it's a multiple of 4
+        while len(api_secret) % 4 != 0:
+            api_secret += '='
+            
+        print(f"🔍 DEBUG: Final Secret Length (with padding): {len(api_secret)}")
         secret_bytes = base64.b64decode(api_secret)
     except Exception as e:
         print(f"❌ Error decoding API Secret: {e}")
-        print("Detailed Error: This usually happens if the secret contains invalid characters or is incomplete.")
         return
         
     signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
