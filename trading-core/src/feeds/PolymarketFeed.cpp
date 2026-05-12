@@ -115,6 +115,10 @@ void PolymarketFeed::on_read(beast::error_code ec, std::size_t) {
 }
 
 void PolymarketFeed::process_message(std::string_view msg) {
+    // Skip non-JSON messages (ping/pong heartbeats, empty frames)
+    if (msg.empty() || (msg[0] != '{' && msg[0] != '[')) {
+        return;
+    }
     try {
         boost::json::value jv = boost::json::parse(msg);
 
