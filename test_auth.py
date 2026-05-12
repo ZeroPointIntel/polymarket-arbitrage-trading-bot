@@ -16,14 +16,11 @@ def test_polymarket_auth():
     
     if not all([api_key, api_secret, api_passphrase, signer_address]):
         print("❌ Error: Missing credentials in .env file.")
-        print(f"Key: {'SET' if api_key else 'MISSING'}")
-        print(f"Secret: {'SET' if api_secret else 'MISSING'}")
-        print(f"Passphrase: {'SET' if api_passphrase else 'MISSING'}")
-        print(f"Signer: {'SET' if signer_address else 'MISSING'}")
         return
 
-    # 1. TEST PUBLIC ENDPOINT FIRST (/time)
     host = "clob.polymarket.com"
+    
+    # 1. TEST PUBLIC
     print(f"📡 Testing Public Access to {host}/time...")
     try:
         t_resp = requests.get(f"https://{host}/time", timeout=5)
@@ -31,7 +28,7 @@ def test_polymarket_auth():
     except Exception as e:
         print(f"❌ Public /time Failed: {e}")
 
-    # 2. TEST AUTHENTICATED ENDPOINT VARIANTS
+    # 2. TEST AUTHENTICATED VARIANTS
     variants = ["/orders", "/orders/", "/v1/orders"]
     
     for path in variants:
@@ -44,23 +41,23 @@ def test_polymarket_auth():
         api_secret_clean = api_secret.strip().replace('-', '+').replace('_', '/')
         while len(api_secret_clean) % 4 != 0:
             api_secret_clean += '='
-        secret_bytes = base64.b64decode(api_secret_clean)
-            
-        signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
-        signature = base64.b64encode(signature_bytes).decode('utf-8')
-        
-        headers = {
-            "POLY-API-KEY": api_key,
-            "POLY-PASSPHRASE": api_passphrase,
-            "POLY-TIMESTAMP": timestamp,
-            "POLY-SIGNATURE": signature,
-            "POLY-ADDRESS": signer_address.lower(),
-            "User-Agent": "python-requests/2.31.0",
-            "Accept": "application/json",
-            "Content-Type": "application/json"
-        }
         
         try:
+            secret_bytes = base64.b64decode(api_secret_clean)
+            signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
+            signature = base64.b64encode(signature_bytes).decode('utf-8')
+            
+            headers = {
+                "POLY-API-KEY": api_key,
+                "POLY-PASSPHRASE": api_passphrase,
+                "POLY-TIMESTAMP": timestamp,
+                "POLY-SIGNATURE": signature,
+                "POLY-ADDRESS": signer_address.lower(),
+                "User-Agent": "python-requests/2.31.0",
+                "Accept": "application/json",
+                "Content-Type": "application/json"
+            }
+            
             response = requests.get(f"https://{host}{path}", headers=headers, timeout=10)
             print(f"Result for {path}: Status {response.status_code}")
             if response.status_code == 200:
@@ -68,12 +65,9 @@ def test_polymarket_auth():
                 print(f"Response: {response.json()}")
                 return
             else:
-                print(f"❌ Failed: {response.text}")
+                print(f"❌ Failed on {path}: {response.text}")
         except Exception as e:
-            print(f"❌ Error: {e}")
-            print("\nTIP: Double check your POLY_API_SECRET is the exact Base64 string from Polymarket.")
-    except Exception as e:
-        print(f"❌ Network error: {e}")
+            print(f"❌ Error during test on {path}: {e}")
 
 if __name__ == "__main__":
     test_polymarket_auth()
