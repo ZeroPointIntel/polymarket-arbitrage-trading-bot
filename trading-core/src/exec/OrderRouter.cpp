@@ -282,9 +282,15 @@ void OrderRouter::execute_rest_order(const Order& order, const Signature& sig, c
         req.set(http::field::user_agent, "PolymarketBot/1.0");
         req.set(http::field::content_type, "application/json");
         if (!api_key_.empty()) {
+            std::string timestamp = std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+            std::string signature = compute_hmac_signature(timestamp, "POST", target, payload);
+
             req.set("POLY_API_KEY", api_key_);
-            req.set("POLY_API_SECRET", api_secret_);
             req.set("POLY_PASSPHRASE", api_passphrase_);
+            req.set("POLY_TIMESTAMP", timestamp);
+            req.set("POLY_SIGNATURE", signature);
+            req.set("POLY_ADDRESS", funder_address_);
         }
         req.body() = payload;
         req.prepare_payload();
@@ -367,6 +373,69 @@ std::string OrderRouter::generate_salt() const {
     static std::mt19937_64 gen(std::random_device{}());
     static std::uniform_int_distribution<uint64_t> dis;
     return std::to_string(dis(gen));
+}
+
+std::string OrderRouter::compute_hmac_signature(const std::string& timestamp, const std::string& method, const std::string& path, const std::string& body) {
+    std::string message = timestamp + method + path + body;
+    auto decoded_secret = base64_decode(api_secret_);
+    
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len;
+    
+    HMAC(EVP_sha256(), decoded_secret.data(), decoded_secret.size(),
+         reinterpret_cast<const unsigned char*>(message.c_str()), message.length(),
+         hash, &hash_len);
+    
+    return base64_encode(hash, hash_len);
+}
+
+std::string OrderRouter::base64_encode(const unsigned char* input, int length) {
+    BIO *bio, *b64;
+    BUF_MEM *bufferPtr;
+
+    b64 = BIO_new(BIO_f_base64());
+    bio = BIO_new(BIO_s_mem());
+    bio = BIO_push(b64, bio);
+
+    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
+    BIO_write(bio, input, length);
+    BIO_flush(bio);
+    BIO_get_mem_ptr(bio, &bufferPtr);
+    BIO_set_close(bio, BIO_NOCLOSE);
+
+    std::string result(bufferPtr->data, bufferPtr->length);
+    BIO_free_all(bio);
+
+    return result;
+}
+
+std::vector<unsigned char> OrderRouter::base64_decode(const std::string& input) {
+    BIO *bio, *b64;
+    int decodeLen = calc_decode_length(input);
+    std::vector<unsigned char> buffer(decodeLen);
+
+    bio = BIO_new_mem_buf(input.c_str(), -1);
+    b64 = BIO_new(BIO_f_base64());
+    bio = BIO_push(b64, bio);
+
+    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
+    int actualLen = BIO_read(bio, buffer.data(), input.length());
+    buffer.resize(actualLen);
+    BIO_free_all(bio);
+
+    return buffer;
+}
+
+int OrderRouter::calc_decode_length(const std::string& b64input) {
+    int len = b64input.size();
+    int padding = 0;
+
+    if (len > 0 && b64input[len-1] == '=' && len > 1 && b64input[len-2] == '=')
+        padding = 2;
+    else if (len > 0 && b64input[len-1] == '=')
+        padding = 1;
+
+    return (len * 3) / 4 - padding;
 }
 
 } // namespace exec

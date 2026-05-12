@@ -9,6 +9,11 @@
 #include <thread>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
+#include <openssl/hmac.h>
+#include <openssl/sha.h>
+#include <openssl/evp.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
 
 namespace trading {
 namespace exec {
@@ -59,6 +64,10 @@ private:
     void simulate_paper_order(const Order& order, const Signature& sig, const std::string& asset = "", const std::string& question = "", double end_date_ts = 0.0, const std::string& strategy = "LA", const std::string& original_order_id = "");
 
     std::string generate_salt() const;
+    std::string compute_hmac_signature(const std::string& timestamp, const std::string& method, const std::string& path, const std::string& body);
+    std::string base64_encode(const unsigned char* input, int length);
+    std::vector<unsigned char> base64_decode(const std::string& input);
+    int calc_decode_length(const std::string& b64input);
 };
 
 } // namespace exec
