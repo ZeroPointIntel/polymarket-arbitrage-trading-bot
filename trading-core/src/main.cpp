@@ -194,6 +194,13 @@ int main() {
         double drawdown = env.count("RISK_TOTAL_DRAWDOWN_KILL") ? std::stod(env["RISK_TOTAL_DRAWDOWN_KILL"]) : 0.40;
         int max_concurrent = env.count("RISK_MAX_CONCURRENT_POSITIONS") ? std::stoi(env["RISK_MAX_CONCURRENT_POSITIONS"]) : 3;
         double min_order = env.count("MIN_ORDER_SIZE") ? std::stod(env["MIN_ORDER_SIZE"]) : 5.0;
+        double fee_rate = env.count("FEE_RATE") ? std::stod(env["FEE_RATE"]) : 0.018;
+        double entry_price_min = env.count("ENTRY_PRICE_MIN") ? std::stod(env["ENTRY_PRICE_MIN"]) : 0.35;
+        double entry_price_max = env.count("ENTRY_PRICE_MAX") ? std::stod(env["ENTRY_PRICE_MAX"]) : 0.65;
+
+        std::string poly_api_key = env.count("POLY_API_KEY") ? env["POLY_API_KEY"] : "";
+        std::string poly_api_secret = env.count("POLY_API_SECRET") ? env["POLY_API_SECRET"] : "";
+        std::string poly_api_passphrase = env.count("POLY_PASSPHRASE") ? env["POLY_PASSPHRASE"] : "";
 
         StateStore store;
         store.set_paper_mode(paper_mode);
@@ -201,7 +208,7 @@ int main() {
         store.set_risk_manager(&risk_manager);
         KellySizer kelly_sizer(0.5, 0.08);
 
-        exec::OrderRouter router(feed_ioc, feed_ctx, store, risk_manager, polymarket_host, polymarket_chain_id, verifying_contract, polymarket_pk, polymarket_funder, paper_mode);
+        exec::OrderRouter router(feed_ioc, feed_ctx, store, risk_manager, polymarket_host, polymarket_chain_id, verifying_contract, polymarket_pk, polymarket_funder, paper_mode, poly_api_key, poly_api_secret, poly_api_passphrase);
 
         GammaClient gamma(gamma_ioc, gamma_ctx);
         auto btc_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "btcusdt");
@@ -290,7 +297,11 @@ int main() {
                 store.update_markets(all_m);
                 {
                     std::lock_guard<std::mutex> lock(detector_mutex);
-                    for (auto& det : la_detectors) { det->set_active_markets(all_m); det->set_entry_price_range(0.20, 0.80); }
+                    for (auto& det : la_detectors) {
+                        det->set_active_markets(all_m);
+                        det->set_entry_price_range(entry_price_min, entry_price_max);
+                        det->set_fee_rate(fee_rate);
+                    }
                     dh_detector = std::make_unique<DumpHedgeDetector>(store, all_m, 0.93, 0.02, 60.0, 30.0);
                 }
                 std::vector<std::string> tokens;

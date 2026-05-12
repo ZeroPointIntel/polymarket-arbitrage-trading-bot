@@ -6,6 +6,7 @@
 #include "../signals/Signal.h"
 #include <string>
 #include <memory>
+#include <thread>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 
@@ -23,7 +24,10 @@ public:
                 const std::string& verifying_contract,
                 const std::string& private_key_hex,
                 const std::string& funder_address,
-                bool paper_mode);
+                bool paper_mode,
+                const std::string& api_key = "",
+                const std::string& api_secret = "",
+                const std::string& api_passphrase = "");
 
     ~OrderRouter();
 
@@ -45,6 +49,9 @@ private:
     std::string clob_api_url_;
     std::string funder_address_;
     bool paper_mode_;
+    std::string api_key_;
+    std::string api_secret_;
+    std::string api_passphrase_;
     
     std::unique_ptr<EIP712Signer> signer_;
 

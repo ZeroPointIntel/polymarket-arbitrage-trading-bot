@@ -100,9 +100,13 @@ std::optional<MarketInfo> GammaClient::probe_slug(const std::string& asset, long
     double secs_remaining = 0;
     if (!end_date.empty()) {
         struct tm tm = {};
-        sscanf(end_date.c_str(), "%d-%d-%dT%d:%d:%dZ",
+        int parsed = sscanf(end_date.c_str(), "%d-%d-%dT%d:%d:%dZ",
                &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
                &tm.tm_hour, &tm.tm_min, &tm.tm_sec);
+        if (parsed < 6) {
+            spdlog::warn("GammaClient: Failed to parse endDate '{}'", end_date);
+            return std::nullopt;
+        }
         tm.tm_year -= 1900; tm.tm_mon -= 1;
         double end_ts = static_cast<double>(timegm(&tm));
         double now_ts = static_cast<double>(std::time(nullptr));

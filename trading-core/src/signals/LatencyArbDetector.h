@@ -41,6 +41,7 @@ public:
     void set_entry_price_range(double lo, double hi) { min_entry_price_ = lo; max_entry_price_ = hi; }
     void set_min_fair_value_strength(double val)     { min_fair_value_strength_ = val; }
     void set_window_seconds(double val)    { window_seconds_ = val; }
+    void set_fee_rate(double val)           { fee_rate_ = val; }
 
 private:
     double compute_fair_value_5m(double price_now, double price_to_beat, 
@@ -64,6 +65,7 @@ private:
     double max_entry_price_ = 0.75;
     double min_fair_value_strength_ = 0.08;
     double window_seconds_ = 300.0;
+    double fee_rate_ = 0.018; // Polymarket taker fee (~1.8% for crypto)
     
     double last_price_now_ = 0.0;
     double last_price_time_ = 0.0;

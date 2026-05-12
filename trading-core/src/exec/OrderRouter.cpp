@@ -12,6 +12,7 @@
 #include <fmt/core.h>
 #include <chrono>
 #include <random>
+#include <thread>
 
 namespace trading {
 namespace exec {
@@ -25,10 +26,14 @@ OrderRouter::OrderRouter(boost::asio::io_context& ioc,
                         const std::string& verifying_contract,
                         const std::string& private_key_hex,
                         const std::string& funder_address,
-                        bool paper_mode)
+                        bool paper_mode,
+                        const std::string& api_key,
+                        const std::string& api_secret,
+                        const std::string& api_passphrase)
     : ioc_(ioc), ctx_(ctx), store_(store), risk_manager_(risk_manager),
       clob_api_url_(clob_api_url), funder_address_(funder_address), 
-      paper_mode_(paper_mode) {
+      paper_mode_(paper_mode),
+      api_key_(api_key), api_secret_(api_secret), api_passphrase_(api_passphrase) {
     signer_ = std::make_unique<EIP712Signer>(std::stoull(chain_id_str), verifying_contract, private_key_hex);
 }
 
@@ -98,7 +103,15 @@ void OrderRouter::submit_latency_arb_order(const LatencyArbSignal& signal, doubl
         if (paper_mode_) {
             simulate_paper_order(order, sig, signal.asset, signal.market.question, signal.market.end_date_ts, "LA");
         } else {
-            execute_rest_order(order, sig, signal.asset, signal.market.question, signal.market.end_date_ts, "LA");
+            // Run live execution in a separate thread to avoid blocking the main loop
+            auto order_copy = order;
+            auto sig_copy = sig;
+            auto asset_copy = signal.asset;
+            auto question_copy = signal.market.question;
+            double end_ts = signal.market.end_date_ts;
+            std::thread([this, order_copy, sig_copy, asset_copy, question_copy, end_ts]() {
+                execute_rest_order(order_copy, sig_copy, asset_copy, question_copy, end_ts, "LA");
+            }).detach();
         }
     } catch (const std::exception& e) {
         spdlog::error("Order signature failed: {}", e.what());
@@ -268,6 +281,11 @@ void OrderRouter::execute_rest_order(const Order& order, const Signature& sig, c
         req.set(http::field::host, host);
         req.set(http::field::user_agent, "PolymarketBot/1.0");
         req.set(http::field::content_type, "application/json");
+        if (!api_key_.empty()) {
+            req.set("POLY_API_KEY", api_key_);
+            req.set("POLY_API_SECRET", api_secret_);
+            req.set("POLY_PASSPHRASE", api_passphrase_);
+        }
         req.body() = payload;
         req.prepare_payload();
 

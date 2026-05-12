@@ -114,12 +114,10 @@ std::optional<LatencyArbSignal> LatencyArbDetector::evaluate(double current_time
         // This is the critical fix vs. the old WS-only path.
         std::string target_token = (direction == "UP") ? market.yes_token_id : market.no_token_id;
         double pm_price = 0.0;
-        bool ws_hit = false;
 
         auto ws_price_opt = state_store_.get_token_price(target_token);
         if (ws_price_opt && ws_price_opt->price > 0.0 && ws_price_opt->price < 1.0) {
             pm_price = ws_price_opt->price;
-            ws_hit = true;
         } else if (price_resolver_) {
             // WS cache miss — fall back to REST (blocking, ~200ms)
             auto rest_price = price_resolver_(target_token, "BUY");
@@ -141,14 +139,15 @@ std::optional<LatencyArbSignal> LatencyArbDetector::evaluate(double current_time
         // Strict Filter: Entry Zone (Narrowed for $50 balance safety)
         if (pm_price < 0.35 || pm_price > 0.65) continue;
 
-        double edge = fair_value - pm_price;
+        double raw_edge = fair_value - pm_price;
+        double fee_adjusted_edge = raw_edge - (2.0 * fee_rate_); // Round-trip fee deduction
         
         // Time-Decay Edge Filter: Increase required edge as expiry nears
         double dynamic_min_edge = min_edge_threshold_;
         if (seconds_remaining < 120.0) dynamic_min_edge *= 1.5;
         if (seconds_remaining < 60.0)  dynamic_min_edge *= 2.0;
         
-        if (edge > dynamic_min_edge) {
+        if (fee_adjusted_edge > dynamic_min_edge) {
             LatencyArbSignal signal{
                 .market = market,
                 .asset = asset_,
@@ -157,7 +156,7 @@ std::optional<LatencyArbSignal> LatencyArbDetector::evaluate(double current_time
                 .polymarket_price = pm_price,
                 .binance_price = price_now,
                 .fair_value = fair_value,
-                .edge = edge,
+                .edge = fee_adjusted_edge,
                 .seconds_remaining = seconds_remaining,
                 .timestamp = current_time_ms
             };
