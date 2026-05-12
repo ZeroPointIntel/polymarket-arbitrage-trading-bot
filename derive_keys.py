@@ -51,16 +51,20 @@ def derive_polymarket_keys():
     signed_message = account.sign_typed_data(domain, types, message)
     signature = signed_message.signature.hex()
     
+    # Ensure signature has 0x prefix
+    if not signature.startswith("0x"):
+        signature = "0x" + signature
+    
     # 2. Call the derivation endpoint
     url = "https://clob.polymarket.com/auth/derive-api-key"
     headers = {
-        "POLY_ADDRESS": address,
+        "POLY_ADDRESS": address.lower(), # Casing can sometimes matter
         "POLY_SIGNATURE": signature,
         "POLY_TIMESTAMP": timestamp,
         "POLY_NONCE": str(nonce)
     }
     
-    print("📡 Sending to Polymarket...")
+    print(f"📡 Sending to Polymarket (L1 Auth)...")
     try:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
@@ -73,8 +77,10 @@ def derive_polymarket_keys():
             print("-" * 40)
             print("\n⚠️  Keep these safe! The Secret is never shown again.")
         else:
-            print(f"❌ Failed to derive keys. Status: {response.status_code}")
-            print(f"Response: {response.text}")
+            print(f"❌ Failed (Status {response.status_code}).")
+            print(f"Headers sent: {headers}")
+            print(f"Response Body: {response.text}")
+            
     except Exception as e:
         print(f"❌ Network error: {e}")
 
