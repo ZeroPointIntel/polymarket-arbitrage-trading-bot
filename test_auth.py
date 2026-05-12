@@ -1,72 +1,112 @@
+"""
+Polymarket Authentication Test - Using the Official SDK
+This bypasses all hand-rolled header logic and uses the exact same
+code path that Polymarket's own trading interface uses.
+"""
 import os
-import time
-import hmac
-import hashlib
-import base64
-import requests
 from dotenv import load_dotenv
 
-def test_polymarket_auth():
+def test_auth():
     load_dotenv()
     
-    api_key = os.getenv("POLY_API_KEY", "").strip()
-    api_secret = os.getenv("POLY_API_SECRET", "").strip()
-    api_passphrase = os.getenv("POLY_PASSPHRASE", "").strip()
-    signer_address = os.getenv("POLYMARKET_SIGNER", "").strip()
+    pk = os.getenv("POLYMARKET_PRIVATE_KEY", "").strip()
+    signer = os.getenv("POLYMARKET_SIGNER", "").strip()
+    funder = os.getenv("POLYMARKET_FUNDER", "").strip()
     
-    if not all([api_key, api_secret, api_passphrase, signer_address]):
-        print("❌ Error: Missing credentials in .env file.")
+    if not pk:
+        print("❌ POLYMARKET_PRIVATE_KEY is missing from .env")
         return
-
-    host = "clob.polymarket.com"
     
-    # 1. TEST PUBLIC
-    print(f"📡 Testing Public Access to {host}/time...")
-    try:
-        t_resp = requests.get(f"https://{host}/time", timeout=5)
-        print(f"✅ Public /time: {t_resp.status_code}")
-    except Exception as e:
-        print(f"❌ Public /time Failed: {e}")
-
-    # 2. TEST AUTHENTICATED ENDPOINT (/profile)
-    path = "/profile"
-    print(f"\n📡 Testing Authentication via {path}...")
-    method = "GET"
-    timestamp = str(int(time.time()))
-    # Simple message for GET: timestamp + method + path
-    message = timestamp + method + path
-    
-    # Robust decoding
-    api_secret_clean = api_secret.strip().replace('-', '+').replace('_', '/')
-    while len(api_secret_clean) % 4 != 0:
-        api_secret_clean += '='
-    secret_bytes = base64.b64decode(api_secret_clean)
+    # Ensure private key has 0x prefix
+    if not pk.startswith("0x"):
+        pk = "0x" + pk
         
-    signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
-    signature = base64.b64encode(signature_bytes).decode('utf-8')
+    print(f"🔗 Signer (MetaMask): {signer}")
+    print(f"🔗 Funder (Poly Proxy): {funder}")
     
-    headers = {
-        "POLY-API-KEY": api_key,
-        "POLY-SIGNATURE": signature,
-        "POLY-TIMESTAMP": timestamp,
-        "POLY-PASSPHRASE": api_passphrase,
-        "POLY-ADDRESS": signer_address.lower(),
-        "User-Agent": "python-requests/2.31.0",
-        "Accept": "application/json"
-    }
-    
-    print(f"📡 Sending request to {path}...")
     try:
-        response = requests.get(f"https://{host}{path}", headers=headers, timeout=10)
-        print(f"Result: Status {response.status_code}")
-        if response.status_code == 200:
-            print("\n✅ AUTHENTICATION SUCCESSFUL!")
-            print(f"Response: {response.json()}")
-        else:
-            print(f"❌ Failed: {response.status_code}")
-            print(f"Body: {response.text}")
+        from py_clob_client.client import ClobClient
+        from py_clob_client.constants import POLYGON
+    except ImportError:
+        print("❌ py-clob-client not installed. Installing now...")
+        import subprocess
+        subprocess.check_call(["pip", "install", "py-clob-client", "--break-system-packages"])
+        from py_clob_client.client import ClobClient
+        from py_clob_client.constants import POLYGON
+    
+    host = "https://clob.polymarket.com"
+    
+    # --- TEST 1: Public Endpoint ---
+    print("\n--- TEST 1: Public Access ---")
+    try:
+        public_client = ClobClient(host)
+        server_time = public_client.get_server_time()
+        print(f"✅ Server Time: {server_time}")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Public access failed: {e}")
+        return
+    
+    # --- TEST 2: Authenticated Client (Proxy Wallet) ---
+    print("\n--- TEST 2: Derive/Create API Key ---")
+    try:
+        # For proxy wallets: signature_type=1, funder=proxy_address
+        if funder and funder.lower() != signer.lower():
+            print("Using Proxy Wallet mode (signature_type=1)")
+            client = ClobClient(
+                host, 
+                key=pk, 
+                chain_id=POLYGON,
+                signature_type=1,
+                funder=funder
+            )
+        else:
+            print("Using EOA mode (signature_type=0)")
+            client = ClobClient(
+                host, 
+                key=pk, 
+                chain_id=POLYGON
+            )
+        
+        # Try to derive or create API credentials
+        creds = client.create_or_derive_api_creds()
+        print(f"\n✅ API CREDENTIALS OBTAINED!")
+        print("-" * 40)
+        print(f"POLY_API_KEY={creds.api_key}")
+        print(f"POLY_API_SECRET={creds.api_secret}")
+        print(f"POLY_PASSPHRASE={creds.api_passphrase}")
+        print("-" * 40)
+        
+    except Exception as e:
+        print(f"❌ Auth failed: {e}")
+        return
+    
+    # --- TEST 3: Use the API key to fetch something ---
+    print("\n--- TEST 3: Fetch Order Book (Authenticated) ---")
+    try:
+        if funder and funder.lower() != signer.lower():
+            auth_client = ClobClient(
+                host,
+                key=pk,
+                chain_id=POLYGON,
+                signature_type=1,
+                funder=funder,
+                creds=creds
+            )
+        else:
+            auth_client = ClobClient(
+                host,
+                key=pk,
+                chain_id=POLYGON,
+                creds=creds
+            )
+        
+        # Try to get open orders (this is the real auth test)
+        open_orders = auth_client.get_orders()
+        print(f"✅ AUTHENTICATION SUCCESSFUL!")
+        print(f"Open Orders: {open_orders}")
+        print("\n🚀 YOU ARE READY TO GO LIVE!")
+    except Exception as e:
+        print(f"❌ Authenticated request failed: {e}")
 
 if __name__ == "__main__":
-    test_polymarket_auth()
+    test_auth()
