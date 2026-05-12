@@ -31,48 +31,46 @@ def test_polymarket_auth():
     except Exception as e:
         print(f"❌ Public /time Failed: {e}")
 
-    # 2. TEST AUTHENTICATED ENDPOINT (/orders)
-    path = "/orders" 
-    method = "GET"
-    timestamp = str(int(time.time()))
-    message = timestamp + method + path
+    # 2. TEST AUTHENTICATED ENDPOINT VARIANTS
+    variants = ["/orders", "/orders/", "/v1/orders"]
     
-    # Robust decoding
-    api_secret = api_secret.strip()
-    try:
-        api_secret = api_secret.replace('-', '+').replace('_', '/')
-        while len(api_secret) % 4 != 0:
-            api_secret += '='
-        secret_bytes = base64.b64decode(api_secret)
-    except Exception as e:
-        print(f"❌ Error decoding API Secret: {e}")
-        return
+    for path in variants:
+        print(f"\n📡 Testing Authentication via {path}...")
+        method = "GET"
+        timestamp = str(int(time.time()))
+        message = timestamp + method + path
         
-    signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
-    signature = base64.b64encode(signature_bytes).decode('utf-8')
-    
-    headers = {
-        "POLY-API-KEY": api_key,
-        "POLY-PASSPHRASE": api_passphrase,
-        "POLY-TIMESTAMP": timestamp,
-        "POLY-SIGNATURE": signature,
-        "POLY-ADDRESS": signer_address.lower(),
-        "User-Agent": "python-requests/2.31.0",
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-    
-    print(f"📡 Testing Authentication for {signer_address} via {path}...")
-    try:
-        response = requests.get(f"https://{host}{path}", headers=headers, timeout=10)
-        if response.status_code == 200:
-            print("\n✅ Authentication Successful!")
-            print("-" * 40)
-            print(f"Orders: {response.json()}")
-            print("-" * 40)
-        else:
-            print(f"\n❌ Authentication Failed (Status {response.status_code})")
-            print(f"Response: {response.text}")
+        # Robust decoding
+        api_secret_clean = api_secret.strip().replace('-', '+').replace('_', '/')
+        while len(api_secret_clean) % 4 != 0:
+            api_secret_clean += '='
+        secret_bytes = base64.b64decode(api_secret_clean)
+            
+        signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
+        signature = base64.b64encode(signature_bytes).decode('utf-8')
+        
+        headers = {
+            "POLY-API-KEY": api_key,
+            "POLY-PASSPHRASE": api_passphrase,
+            "POLY-TIMESTAMP": timestamp,
+            "POLY-SIGNATURE": signature,
+            "POLY-ADDRESS": signer_address.lower(),
+            "User-Agent": "python-requests/2.31.0",
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            response = requests.get(f"https://{host}{path}", headers=headers, timeout=10)
+            print(f"Result for {path}: Status {response.status_code}")
+            if response.status_code == 200:
+                print(f"✅ SUCCESS on {path}!")
+                print(f"Response: {response.json()}")
+                return
+            else:
+                print(f"❌ Failed: {response.text}")
+        except Exception as e:
+            print(f"❌ Error: {e}")
             print("\nTIP: Double check your POLY_API_SECRET is the exact Base64 string from Polymarket.")
     except Exception as e:
         print(f"❌ Network error: {e}")
