@@ -303,6 +303,7 @@ int main() {
                         det->set_fee_rate(fee_rate);
                     }
                     dh_detector = std::make_unique<DumpHedgeDetector>(store, all_m, 0.93, 0.02, 60.0, 30.0);
+                    dh_detector->set_fee_rate(fee_rate);
                 }
                 std::vector<std::string> tokens;
                 for (const auto& m : all_m) { tokens.push_back(m.yes_token_id); tokens.push_back(m.no_token_id); }

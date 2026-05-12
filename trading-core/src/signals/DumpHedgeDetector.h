@@ -23,6 +23,7 @@ public:
     
     void set_sum_target(double val) { sum_target_ = val; }
     void set_min_discount(double val) { min_discount_ = val; }
+    void set_fee_rate(double val) { fee_rate_ = val; }
 
 private:
     StateStore& state_store_;
@@ -31,6 +32,7 @@ private:
     double min_discount_;
     double min_seconds_remaining_;
     double cooldown_seconds_;
+    double fee_rate_ = 0.018;
 
     std::unordered_map<std::string, double> last_signal_time_;
     int evaluations_ = 0;

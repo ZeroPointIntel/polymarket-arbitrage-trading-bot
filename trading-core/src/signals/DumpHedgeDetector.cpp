@@ -58,7 +58,8 @@ std::optional<DumpHedgeSignal> DumpHedgeDetector::evaluate(double current_time_m
         if (yes_price <= 0 || no_price <= 0) continue;
 
         double combined = yes_price + no_price;
-        double discount = 1.0 - combined;
+        double entry_fees = combined * fee_rate_; 
+        double discount = 1.0 - combined - entry_fees;
 
         if (combined > sum_target_) continue;
         if (discount < min_discount_) continue;
