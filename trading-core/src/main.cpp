@@ -33,28 +33,25 @@ namespace ssl = net::ssl;
 using tcp = net::ip::tcp;
 
 // Query USDC balance from Polygon RPC (on-chain)
-double fetch_usdc_balance(const std::string& funder_address) {
+double fetch_usdc_balance_for_contract(const std::string& funder_address, const std::string& usdc_contract, const std::string& label) {
     try {
-        // USDC.e on Polygon: 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
-        // balanceOf(address) selector = 0x70a08231
         std::string addr = funder_address;
         if (addr.substr(0, 2) == "0x") addr = addr.substr(2);
-        // Pad address to 32 bytes
+        // Lowercase the address for consistency
+        std::transform(addr.begin(), addr.end(), addr.begin(), ::tolower);
         std::string padded_addr = std::string(64 - addr.size(), '0') + addr;
         std::string call_data = "0x70a08231" + padded_addr;
 
-        // Build JSON-RPC request
         boost::json::object rpc_req;
         rpc_req["jsonrpc"] = "2.0";
         rpc_req["method"] = "eth_call";
         rpc_req["id"] = 1;
         boost::json::object call_obj;
-        call_obj["to"] = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+        call_obj["to"] = usdc_contract;
         call_obj["data"] = call_data;
         rpc_req["params"] = boost::json::array{call_obj, "latest"};
         std::string body = boost::json::serialize(rpc_req);
 
-        // Connect to Polygon RPC
         net::io_context ioc;
         ssl::context ctx{ssl::context::sslv23_client};
         ctx.set_default_verify_paths();
@@ -80,19 +77,63 @@ double fetch_usdc_balance(const std::string& funder_address) {
         http::read(stream, buffer, res);
 
         auto jv = boost::json::parse(res.body());
-        std::string hex_result = std::string(jv.as_object().at("result").as_string());
+        auto& obj = jv.as_object();
         
-        // Convert hex to uint64 and divide by 10^6 (USDC has 6 decimals)
+        // Check for RPC errors
+        if (obj.contains("error")) {
+            spdlog::warn("RPC error for {}: {}", label, res.body());
+            beast::error_code ec;
+            stream.shutdown(ec);
+            return -1;
+        }
+        
+        if (!obj.contains("result")) {
+            spdlog::warn("RPC response missing 'result' for {}: {}", label, res.body());
+            beast::error_code ec;
+            stream.shutdown(ec);
+            return -1;
+        }
+        
+        std::string hex_result = std::string(obj.at("result").as_string());
+        
+        // Handle "0x" or empty results
+        if (hex_result.empty() || hex_result == "0x" || hex_result == "0x0") {
+            beast::error_code ec;
+            stream.shutdown(ec);
+            return 0.0;
+        }
+        
         unsigned long long raw_balance = std::stoull(hex_result, nullptr, 16);
         double balance = static_cast<double>(raw_balance) / 1000000.0;
         
         beast::error_code ec;
-        stream.shutdown(ec); // Ignore shutdown errors
+        stream.shutdown(ec);
         return balance;
     } catch (const std::exception& e) {
-        spdlog::error("Failed to fetch on-chain USDC balance: {}", e.what());
+        spdlog::error("Failed to fetch {} balance: {}", label, e.what());
         return -1;
     }
+}
+
+double fetch_usdc_balance(const std::string& funder_address) {
+    // Try USDC.e first (bridged), then native USDC
+    double bal = fetch_usdc_balance_for_contract(funder_address, "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "USDC.e");
+    if (bal >= 0) {
+        spdlog::info("USDC.e balance: ${:.2f}", bal);
+    }
+    
+    double bal2 = fetch_usdc_balance_for_contract(funder_address, "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", "USDC");
+    if (bal2 >= 0) {
+        spdlog::info("USDC (native) balance: ${:.2f}", bal2);
+    }
+    
+    // Return the sum of both (user might have funds in either)
+    double total = 0;
+    if (bal >= 0) total += bal;
+    if (bal2 >= 0) total += bal2;
+    
+    if (bal < 0 && bal2 < 0) return -1; // Both failed
+    return total;
 }
 
 struct ExitConfig {
