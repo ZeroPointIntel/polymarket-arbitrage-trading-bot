@@ -28,8 +28,8 @@ def test_polymarket_auth():
     except Exception as e:
         print(f"❌ Public /time Failed: {e}")
 
-    # 2. TEST AUTHENTICATED ENDPOINT (/orders)
-    path = "/orders"
+    # 2. TEST AUTHENTICATED ENDPOINT (/sampling)
+    path = "/sampling"
     print(f"\n📡 Testing Authentication via {path}...")
     method = "GET"
     timestamp = str(int(time.time()))
