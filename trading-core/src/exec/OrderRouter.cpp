@@ -25,13 +25,14 @@ OrderRouter::OrderRouter(boost::asio::io_context& ioc,
                         const std::string& chain_id_str,
                         const std::string& verifying_contract,
                         const std::string& private_key_hex,
+                        const std::string& signer_address,
                         const std::string& funder_address,
                         bool paper_mode,
                         const std::string& api_key,
                         const std::string& api_secret,
                         const std::string& api_passphrase)
     : ioc_(ioc), ctx_(ctx), store_(store), risk_manager_(risk_manager),
-      clob_api_url_(clob_api_url), funder_address_(funder_address), 
+      clob_api_url_(clob_api_url), signer_address_(signer_address), funder_address_(funder_address), 
       paper_mode_(paper_mode),
       api_key_(api_key), api_secret_(api_secret), api_passphrase_(api_passphrase) {
     signer_ = std::make_unique<EIP712Signer>(std::stoull(chain_id_str), verifying_contract, private_key_hex);
@@ -43,7 +44,7 @@ void OrderRouter::submit_order(const std::string& token_id, double price, double
     Order order;
     order.salt = generate_salt();
     order.maker = funder_address_;
-    order.signer = funder_address_;
+    order.signer = signer_address_;
     order.taker = "0x0000000000000000000000000000000000000000";
     order.tokenId = token_id;
     
@@ -63,7 +64,7 @@ void OrderRouter::submit_order(const std::string& token_id, double price, double
     order.nonce = "0"; 
     order.feeRateBps = "0"; 
     order.side = side; 
-    order.signatureType = 0; 
+    order.signatureType = (funder_address_ == signer_address_ ? 0 : 1); 
 
     try {
         Signature sig = signer_->sign_order(order);
@@ -81,7 +82,7 @@ void OrderRouter::submit_latency_arb_order(const LatencyArbSignal& signal, doubl
     Order order;
     order.salt = generate_salt();
     order.maker = funder_address_;
-    order.signer = funder_address_;
+    order.signer = signer_address_;
     order.taker = "0x0000000000000000000000000000000000000000";
     order.tokenId = signal.token_id;
     
@@ -96,7 +97,7 @@ void OrderRouter::submit_latency_arb_order(const LatencyArbSignal& signal, doubl
     order.nonce = "0"; 
     order.feeRateBps = "0"; 
     order.side = 0; // BUY
-    order.signatureType = 0; 
+    order.signatureType = (funder_address_ == signer_address_ ? 0 : 1); 
 
     try {
         Signature sig = signer_->sign_order(order);
@@ -175,7 +176,7 @@ void OrderRouter::submit_close_order(const std::string& order_id, const std::str
     Order order;
     order.salt = generate_salt();
     order.maker = funder_address_;
-    order.signer = funder_address_;
+    order.signer = signer_address_;
     order.taker = "0x0000000000000000000000000000000000000000";
     order.tokenId = token_id;
     
@@ -190,7 +191,7 @@ void OrderRouter::submit_close_order(const std::string& order_id, const std::str
     order.nonce = "0"; 
     order.feeRateBps = "0"; 
     order.side = 1; // SELL
-    order.signatureType = 0; 
+    order.signatureType = (funder_address_ == signer_address_ ? 0 : 1); 
 
     try {
         Signature sig = signer_->sign_order(order);
@@ -290,7 +291,7 @@ void OrderRouter::execute_rest_order(const Order& order, const Signature& sig, c
             req.set("POLY_PASSPHRASE", api_passphrase_);
             req.set("POLY_TIMESTAMP", timestamp);
             req.set("POLY_SIGNATURE", signature);
-            req.set("POLY_ADDRESS", funder_address_);
+            req.set("POLY_ADDRESS", signer_address_);
         }
         req.body() = payload;
         req.prepare_payload();

@@ -28,6 +28,7 @@ public:
                 const std::string& chain_id_str,
                 const std::string& verifying_contract,
                 const std::string& private_key_hex,
+                const std::string& signer_address,
                 const std::string& funder_address,
                 bool paper_mode,
                 const std::string& api_key = "",
@@ -52,6 +53,7 @@ private:
     risk::RiskManager& risk_manager_;
 
     std::string clob_api_url_;
+    std::string signer_address_;
     std::string funder_address_;
     bool paper_mode_;
     std::string api_key_;

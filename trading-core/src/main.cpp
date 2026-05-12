@@ -165,7 +165,13 @@ int main() {
 
         std::string polymarket_host = env.count("POLYMARKET_HOST") ? env["POLYMARKET_HOST"] : "https://clob.polymarket.com";
         std::string polymarket_chain_id = env.count("POLYMARKET_CHAIN_ID") ? env["POLYMARKET_CHAIN_ID"] : "137";
-        std::string polymarket_funder = env.count("POLYMARKET_FUNDER") ? env["POLYMARKET_FUNDER"] : "0x0000000000000000000000000000000000000000";
+        std::string polymarket_signer = env.count("POLYMARKET_SIGNER") ? env["POLYMARKET_SIGNER"] : "";
+        std::string polymarket_funder = env.count("POLYMARKET_FUNDER") ? env["POLYMARKET_FUNDER"] : "";
+        
+        // Default signer to funder if missing, or vice-versa
+        if (polymarket_signer.empty() && !polymarket_funder.empty()) polymarket_signer = polymarket_funder;
+        if (polymarket_funder.empty() && !polymarket_signer.empty()) polymarket_funder = polymarket_signer;
+
         std::string polymarket_pk = env.count("POLYMARKET_PRIVATE_KEY") ? env["POLYMARKET_PRIVATE_KEY"] : "0x0000000000000000000000000000000000000000000000000000000000000001";
         std::string verifying_contract = env.count("POLYMARKET_EXCHANGE_ADDRESS") ? env["POLYMARKET_EXCHANGE_ADDRESS"] : "0x4bFb9eC6c905307De7724730991afD718ee99312";
 
@@ -208,7 +214,7 @@ int main() {
         store.set_risk_manager(&risk_manager);
         KellySizer kelly_sizer(0.5, 0.08);
 
-        exec::OrderRouter router(feed_ioc, feed_ctx, store, risk_manager, polymarket_host, polymarket_chain_id, verifying_contract, polymarket_pk, polymarket_funder, paper_mode, poly_api_key, poly_api_secret, poly_api_passphrase);
+        exec::OrderRouter router(feed_ioc, feed_ctx, store, risk_manager, polymarket_host, polymarket_chain_id, verifying_contract, polymarket_pk, polymarket_signer, polymarket_funder, paper_mode, poly_api_key, poly_api_secret, poly_api_passphrase);
 
         GammaClient gamma(gamma_ioc, gamma_ctx);
         auto btc_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "btcusdt");
