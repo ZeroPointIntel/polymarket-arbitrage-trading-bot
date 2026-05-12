@@ -21,8 +21,79 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <fmt/core.h>
 #include <atomic>
+#include <boost/beast.hpp>
+#include <boost/beast/ssl.hpp>
+#include <boost/json.hpp>
 
 using namespace trading;
+namespace beast = boost::beast;
+namespace http = beast::http;
+namespace net = boost::asio;
+namespace ssl = net::ssl;
+using tcp = net::ip::tcp;
+
+// Query USDC balance from Polygon RPC (on-chain)
+double fetch_usdc_balance(const std::string& funder_address) {
+    try {
+        // USDC.e on Polygon: 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
+        // balanceOf(address) selector = 0x70a08231
+        std::string addr = funder_address;
+        if (addr.substr(0, 2) == "0x") addr = addr.substr(2);
+        // Pad address to 32 bytes
+        std::string padded_addr = std::string(64 - addr.size(), '0') + addr;
+        std::string call_data = "0x70a08231" + padded_addr;
+
+        // Build JSON-RPC request
+        boost::json::object rpc_req;
+        rpc_req["jsonrpc"] = "2.0";
+        rpc_req["method"] = "eth_call";
+        rpc_req["id"] = 1;
+        boost::json::object call_obj;
+        call_obj["to"] = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+        call_obj["data"] = call_data;
+        rpc_req["params"] = boost::json::array{call_obj, "latest"};
+        std::string body = boost::json::serialize(rpc_req);
+
+        // Connect to Polygon RPC
+        net::io_context ioc;
+        ssl::context ctx{ssl::context::sslv23_client};
+        ctx.set_default_verify_paths();
+        tcp::resolver resolver(ioc);
+        beast::ssl_stream<beast::tcp_stream> stream(ioc, ctx);
+        
+        if (!SSL_set_tlsext_host_name(stream.native_handle(), "polygon-rpc.com")) {
+            return -1;
+        }
+        auto const results = resolver.resolve("polygon-rpc.com", "443");
+        beast::get_lowest_layer(stream).connect(results);
+        stream.handshake(ssl::stream_base::client);
+
+        http::request<http::string_body> req{http::verb::post, "/", 11};
+        req.set(http::field::host, "polygon-rpc.com");
+        req.set(http::field::content_type, "application/json");
+        req.body() = body;
+        req.prepare_payload();
+        http::write(stream, req);
+
+        beast::flat_buffer buffer;
+        http::response<http::string_body> res;
+        http::read(stream, buffer, res);
+
+        auto jv = boost::json::parse(res.body());
+        std::string hex_result = std::string(jv.as_object().at("result").as_string());
+        
+        // Convert hex to uint64 and divide by 10^6 (USDC has 6 decimals)
+        unsigned long long raw_balance = std::stoull(hex_result, nullptr, 16);
+        double balance = static_cast<double>(raw_balance) / 1000000.0;
+        
+        beast::error_code ec;
+        stream.shutdown(ec); // Ignore shutdown errors
+        return balance;
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to fetch on-chain USDC balance: {}", e.what());
+        return -1;
+    }
+}
 
 struct ExitConfig {
     double near_win_price = 0.92;
@@ -159,8 +230,22 @@ int main() {
         double starting_balance = 1000.0;
         if (paper_mode && env.count("PAPER_STARTING_BALANCE")) {
             starting_balance = std::stod(env["PAPER_STARTING_BALANCE"]);
-        } else if (!paper_mode && env.count("LIVE_STARTING_BALANCE")) {
-            starting_balance = std::stod(env["LIVE_STARTING_BALANCE"]);
+        } else if (!paper_mode) {
+            // Auto-detect USDC balance from Polygon blockchain
+            std::string funder = env.count("POLYMARKET_FUNDER") ? env["POLYMARKET_FUNDER"] : "";
+            if (!funder.empty()) {
+                spdlog::info("Fetching on-chain USDC balance for {}...", funder);
+                double live_bal = fetch_usdc_balance(funder);
+                if (live_bal > 0) {
+                    starting_balance = live_bal;
+                    spdlog::info("Detected live USDC balance: ${:.2f}", starting_balance);
+                } else {
+                    spdlog::warn("Could not fetch on-chain balance. Using fallback.");
+                    if (env.count("LIVE_STARTING_BALANCE")) {
+                        starting_balance = std::stod(env["LIVE_STARTING_BALANCE"]);
+                    }
+                }
+            }
         }
 
         std::string polymarket_host = env.count("POLYMARKET_HOST") ? env["POLYMARKET_HOST"] : "https://clob.polymarket.com";
