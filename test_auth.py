@@ -31,7 +31,19 @@ def test_polymarket_auth():
     # Compute HMAC Signature
     # Payload: timestamp + method + path + body
     message = timestamp + method + path
-    secret_bytes = base64.b64decode(api_secret)
+    
+    # Fix potential padding issues in the secret
+    missing_padding = len(api_secret) % 4
+    if missing_padding:
+        api_secret += '=' * (4 - missing_padding)
+        
+    try:
+        secret_bytes = base64.b64decode(api_secret)
+    except Exception as e:
+        print(f"❌ Error decoding API Secret: {e}")
+        print("Check if you copied the secret correctly from the script output.")
+        return
+        
     signature_bytes = hmac.new(secret_bytes, message.encode('utf-8'), hashlib.sha256).digest()
     signature = base64.b64encode(signature_bytes).decode('utf-8')
     
