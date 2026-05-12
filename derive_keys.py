@@ -55,31 +55,42 @@ def derive_polymarket_keys():
     if not signature.startswith("0x"):
         signature = "0x" + signature
     
-    # 2. Call the derivation endpoint
-    url = "https://clob.polymarket.com/auth/derive-api-key"
+    # 2. Try to CREATE the key first (POST)
+    create_url = "https://clob.polymarket.com/auth/api-key"
     headers = {
-        "POLY_ADDRESS": address.lower(), # Casing can sometimes matter
+        "POLY_ADDRESS": address.lower(),
         "POLY_SIGNATURE": signature,
         "POLY_TIMESTAMP": timestamp,
         "POLY_NONCE": str(nonce)
     }
     
-    print(f"📡 Sending to Polymarket (L1 Auth)...")
+    print(f"📡 Sending Create request (POST)...")
     try:
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
+        response = requests.post(create_url, headers=headers)
+        if response.status_code in [200, 201]:
             data = response.json()
-            print("\n✅ SUCCESS! Copy these to your .env file:")
+            print("\n✅ SUCCESS! Created NEW keys:")
             print("-" * 40)
             print(f"POLY_API_KEY={data['apiKey']}")
             print(f"POLY_API_SECRET={data['secret']}")
             print(f"POLY_PASSPHRASE={data['passphrase']}")
             print("-" * 40)
-            print("\n⚠️  Keep these safe! The Secret is never shown again.")
+        elif "already exists" in response.text.lower() or response.status_code == 400:
+            print("ℹ️  Key already exists. Attempting to DERIVE instead...")
+            derive_url = "https://clob.polymarket.com/auth/derive-api-key"
+            response = requests.get(derive_url, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                print("\n✅ SUCCESS! Derived EXISTING keys:")
+                print("-" * 40)
+                print(f"POLY_API_KEY={data['apiKey']}")
+                print(f"POLY_API_SECRET={data['secret']}")
+                print(f"POLY_PASSPHRASE={data['passphrase']}")
+                print("-" * 40)
+            else:
+                print(f"❌ Derive failed: {response.text}")
         else:
-            print(f"❌ Failed (Status {response.status_code}).")
-            print(f"Headers sent: {headers}")
-            print(f"Response Body: {response.text}")
+            print(f"❌ Create failed (Status {response.status_code}): {response.text}")
             
     except Exception as e:
         print(f"❌ Network error: {e}")
