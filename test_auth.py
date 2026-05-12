@@ -52,11 +52,11 @@ def test_polymarket_auth():
     signature = base64.b64encode(signature_bytes).decode('utf-8')
     
     headers = {
-        "POLY_API_KEY": api_key,
-        "POLY_PASSPHRASE": api_passphrase,
-        "POLY_TIMESTAMP": timestamp,
-        "POLY_SIGNATURE": signature,
-        "POLY_ADDRESS": signer_address.lower(),
+        "POLY-API-KEY": api_key,
+        "POLY-PASSPHRASE": api_passphrase,
+        "POLY-TIMESTAMP": timestamp,
+        "POLY-SIGNATURE": signature,
+        "POLY-ADDRESS": signer_address.lower(),
         "User-Agent": "python-requests/2.31.0",
         "Accept": "application/json",
         "Content-Type": "application/json"
