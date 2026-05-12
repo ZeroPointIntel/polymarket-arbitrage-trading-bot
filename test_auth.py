@@ -22,9 +22,9 @@ def test_polymarket_auth():
         print(f"Signer: {'SET' if signer_address else 'MISSING'}")
         return
 
-    # Endpoint to test (fetch allowance/balance info)
+    # Endpoint to test (fetch open orders)
     host = "clob.polymarket.com"
-    path = "/balance/allowance?asset_type=0" # 0 = USDC
+    path = "/orders?closed=false" 
     method = "GET"
     timestamp = str(int(time.time()))
     
