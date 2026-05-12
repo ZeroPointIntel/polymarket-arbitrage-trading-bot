@@ -33,8 +33,8 @@ def test_polymarket_auth():
     print(f"\n📡 Testing Authentication via {path}...")
     method = "GET"
     timestamp = str(int(time.time()))
-    nonce = "0"
-    message = timestamp + method + path + nonce
+    # Simple message for GET: timestamp + method + path
+    message = timestamp + method + path
     
     # Robust decoding
     api_secret_clean = api_secret.strip().replace('-', '+').replace('_', '/')
@@ -51,13 +51,11 @@ def test_polymarket_auth():
         "POLY-TIMESTAMP": timestamp,
         "POLY-PASSPHRASE": api_passphrase,
         "POLY-ADDRESS": signer_address.lower(),
-        "POLY-NONCE": nonce,
-        "POLY-SIGNATURE-TYPE": "1", # Key for Proxy Wallets
         "User-Agent": "python-requests/2.31.0",
         "Accept": "application/json"
     }
     
-    print(f"📡 Sending request with {len(headers)} headers...")
+    print(f"📡 Sending request to {path}...")
     try:
         response = requests.get(f"https://{host}{path}", headers=headers, timeout=10)
         print(f"Result: Status {response.status_code}")
